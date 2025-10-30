@@ -1,0 +1,366 @@
+The purpose of this file is some data exploration on deers
+
+
+```{r}
+#Clear everything out and start fresh
+rm(list=ls())
+library(reproducible) #setting up directories for data management
+library(readr)        #Needed to read and merge all the csv's in the camera folder
+library(dplyr)        #data wranglin'
+library(lubridate)    #datetime manipulation
+library(tidyr)        #more data manipulation
+library(stringr)      #detecting character strings
+library(ggplot2)      #data visualization
+library(purrr)        #feline-friendly loops 
+
+
+#This just sets up files for inputs (already created, must contain your files), and outputs
+input_directory<-reproducible::checkPath(file.path(getwd(), "inputs"), create = TRUE)
+output_directory<-reproducible::checkPath(file.path(getwd(), "outputs"), create = TRUE)
+figure_directory<-reproducible::checkPath(file.path(getwd(), "figures"), create = TRUE)
+
+
+#read in the files we need
+dets<-read.csv(file.path(input_directory, "OSM_camera_detections.csv"))
+camop<-read.csv(file.path(input_directory, "OSM_camera_deployment.csv"))
+covs<-read.csv(file.path(input_directory, "OSM_camera_covariates.csv"))
+
+```
+
+
+Lets first get our response variable and try to plot it
+```{r}
+
+#independent detections of white-tailed deer
+wtd<-dets%>%
+  filter(species == "White-tailed deer")%>%
+  mutate(datetime = ymd_hms(datetime))
+
+
+#arrange the detection by site, species, and time, then group by site
+wtd<-wtd%>%
+  arrange(array, site, datetime)%>%
+  group_by(site)%>%
+   mutate(duration = as.numeric(difftime(datetime,lag(datetime),units = "mins")))
+
+
+#Set up the framework for assigning unique IDs
+wtd$Event.ID<-9999 #This is just an arbitrary event identification code
+mins<-2 # THIS IS THE DETECTION EVENT BREAK-POINT YOU CAN CHANGE
+seq <- as.numeric(paste0(nrow(wtd),0))
+seq <- round(seq,-(nchar(seq)))
+
+#This will go through each row and figure out how far apart in time each one is
+#So this creates unique event identifications for subsequent rows IF they are more than 30mins apart
+for (i in 2:nrow(wtd)) {
+ wtd$Event.ID[i-1]  <- paste0("E",format(seq, scientific = F))
+  if(is.na(wtd$duration[i]) | abs(wtd$duration[i]) > mins){
+    seq <- seq + 1 
+  }
+}
+
+# Update the information for the last row
+# group ID  for the last row
+if(wtd$duration[nrow(wtd)] < mins| 
+   is.na(wtd$duration[nrow(wtd)])){
+  wtd$Event.ID[nrow(wtd)] <- wtd$Event.ID[nrow(wtd)-1] 
+} else{
+  wtd$Event.ID[nrow(wtd)] <- paste0("E",format(seq+1, scientific = F)) 
+}
+
+# Subset to just top rows to get independent detections.
+
+# Note: This is a critical step to make a decision on how we filter this - don't want to loose data by just taking first row when there are multiple rows of data in a detection? Just want to sum? take highest? THINK SYD
+wtd_ind<-wtd %>%
+  group_by(Event.ID) %>% 
+  filter(row_number()==1)%>%
+  ungroup()
+
+
+#Lets add in the site coordinates
+wtd_spatial<-merge(
+  #The camera file with locations
+  camop%>%
+  select(site, lat, long),
+   #summary of detections
+  wtd_ind%>%
+  group_by(site)%>%
+  summarise(n_events = n()),
+  by = c("site"), all.x = TRUE)%>%
+  mutate(n_events = ifelse(is.na(n_events), 0, n_events))
+
+library(ggspatial)
+library(rnaturalearth)
+library(rnaturalearthdata)
+
+# Get Canada basemap
+canada <- ne_countries(country = "canada", scale = "medium", returnclass = "sf")
+
+ggplot() +
+  geom_sf(data = canada, fill = "gray95", color = "gray70") +
+  geom_point(data = wtd_spatial,
+             aes(x = long, y = lat, color = n_events, size = n_events)) +
+  scale_color_viridis_c(option = "plasma") +
+  coord_sf(xlim = range(wtd_spatial$long) + c(-0.1, 0.1),
+           ylim = range(wtd_spatial$lat) + c(-0.1, 0.1),
+           expand = FALSE) +
+  theme_minimal() +
+  labs(
+    x = "Longitude",
+    y = "Latitude",
+    title = "Wildlife detection events per site",
+    color = "Number of events",
+    size = "Number of events"
+  )
+
+
+#What about a plot over time of year? Or by year?
+wtd_ind%>%
+  mutate(month = month(datetime),
+         year = year(datetime))%>%
+  group_by(year, month, site)%>%
+  summarise(n_events = n())%>%
+  mutate(n_events = ifelse(is.na(n_events), 0, n_events))%>%
+  ggplot(aes(, x = as.factor(month), y = n_events))+
+  geom_bar(stat= "identity")+
+  facet_wrap(~year, nrow = 1)
+
+
+```
+
+
+Can we break this down into events of mothers with fawns and then just lone mothers?
+```{r}
+
+#So this is a frame of wtd and the independent detecitons
+wtd
+
+#Lets filter it down to just look at known females and yoy
+df<-wtd%>%
+  select(array, site, datetime, female, yoy, Event.ID)
+
+#Second, since we don't care about numbers, we are going to turn things into binary present or absent. And NAs to zero
+df <- df %>%
+  mutate(across(c(female, yoy),
+                ~ ifelse(is.na(.x) | .x == 0, 0, 1)))
+
+df<-df %>%
+  group_by(Event.ID) %>%
+  mutate(
+    # Whether any yoy = 1 within the event
+    yoy_present = as.integer(any(yoy == 1, na.rm = TRUE)),
+    
+    # Whether ONLY females were present (female = 1 somewhere, but no yoy = 1 anywhere)
+    female_only = as.integer(any(female == 1, na.rm = TRUE) & !any(yoy == 1, na.rm = TRUE))
+  ) %>%
+  ungroup()
+
+#Reduce to one observation per event, and filter out events that featured neither
+df<-df%>%
+  group_by(Event.ID)%>%
+  filter(row_number()==1)%>%
+  filter(!(yoy_present == 0 & female_only == 0))%>%
+  ungroup()
+
+
+
+
+
+#Just females
+df%>%
+  filter(female_only > 0)%>%
+  summarise(n_events = n())
+
+females_only<-df%>%
+  filter(female_only > 0)
+n_distinct(females_only$array)
+n_distinct(females_only$site)
+
+
+fawns<-df%>%
+  filter(yoy_present > 0)
+nrow(fawns)
+n_distinct(fawns$array)
+n_distinct(fawns$site)
+
+#Lets map them
+#Dont forget to join in the coordinates
+females_spatial<-merge(
+  #The camera file with locations
+  camop%>%
+  select(site, lat, long),
+   #summary of detections
+  females_only%>%
+  group_by(site)%>%
+  summarise(n_events = n()),
+  by = c("site"), all.x = TRUE)%>%
+  mutate(n_events = ifelse(is.na(n_events), 0, n_events))
+
+
+ggplot() +
+  geom_sf(data = canada, fill = "gray95", color = "gray70") +
+  geom_point(data = females_spatial,
+             aes(x = long, y = lat, color = n_events, size = n_events)) +
+  scale_color_viridis_c(option = "plasma") +
+  coord_sf(xlim = range(females_spatial$long) + c(-0.1, 0.1),
+           ylim = range(females_spatial$lat) + c(-0.1, 0.1),
+           expand = FALSE) +
+  theme_minimal() +
+  labs(
+    x = "Longitude",
+    y = "Latitude",
+    title = "Female only detections",
+    color = "Number of events",
+    size = "Number of events"
+  )
+
+
+fawns_spatial<-merge(
+  #The camera file with locations
+  camop%>%
+  select(site, lat, long),
+   #summary of detections
+  fawns%>%
+  group_by(site)%>%
+  summarise(n_events = n()),
+  by = c("site"), all.x = TRUE)%>%
+  mutate(n_events = ifelse(is.na(n_events), 0, n_events))
+
+
+ggplot() +
+  geom_sf(data = canada, fill = "gray95", color = "gray70") +
+  geom_point(data = fawns_spatial,
+             aes(x = long, y = lat, color = n_events, size = n_events)) +
+  scale_color_viridis_c(option = "plasma") +
+  coord_sf(xlim = range(fawns_spatial$long) + c(-0.1, 0.1),
+           ylim = range(fawns_spatial$lat) + c(-0.1, 0.1),
+           expand = FALSE) +
+  theme_minimal() +
+  labs(
+    x = "Longitude",
+    y = "Latitude",
+    title = "Female only detections",
+    color = "Number of events",
+    size = "Number of events"
+  )
+
+
+```
+
+
+Covariate Files
+```{r}
+#Ok lets work on the covariates. I am just going to make a broad disturbance index for each site
+#at 1000m reflecting the camera spacing
+covs<-covs%>%
+  filter(buff_dist == 1000)%>%
+  #remove the habitat classifications
+  select(-c(lc_class110, lc_class120, lc_class20, lc_class210, lc_class220, lc_class230, lc_class32, lc_class33, lc_class34, lc_class50))
+
+#Create a sum across columns 4 to 50
+covs<-covs%>%
+  mutate(disturbance_index = rowSums(across(4:50)))%>%
+  select(array, site, disturbance_index)
+
+ggplot(covs, aes(x = disturbance_index))+
+  geom_histogram()+
+  facet_wrap(~array)
+
+
+#Ok now link that into the detection files
+females_spatial<-merge(covs, females_spatial, by = c("site"))
+fawns_spatial<-merge(covs, fawns_spatial, by = c("site"))
+
+#This is stupid lets make this into one frame
+df<-merge(females_spatial%>%rename(females = n_events),
+fawns_spatial%>%rename(yoy = n_events))
+
+ggplot(df, aes(x = disturbance_index, y = females, color = array))+
+  geom_point(size = 3)+
+  ylab("Female detections")+
+  xlab("Disturbance index")+
+  ggtitle("Females ~ disturbance")
+
+ggplot(df, aes(x = disturbance_index, y = yoy, color = array))+
+  geom_point(size = 3)+
+  ylab("YOY detections")+
+  xlab("Disturbance index")+
+  ggtitle("Fawns ~ disturbance")
+
+#A couple quick data transformations
+hist(df$females)
+
+
+#Quick models
+m1<-glmmTMB::glmmTMB(females ~ disturbance_index + (1|array),
+                 family = poisson,
+                 data = df)
+summary(m1)
+
+
+#Quick models
+m2<-glmmTMB::glmmTMB(yoy ~ disturbance_index + (1|array),
+                 family = poisson,
+                 data = df)
+summary(m2)
+
+
+library(segmented)
+
+# Start with a regular linear model (use log if counts are highly skewed)
+lm_base <- lm(yoy ~ disturbance_index, data = df)
+
+# Fit a segmented model with an estimated breakpoint
+seg_fit <- segmented(lm_base, seg.Z = ~disturbance_index)
+
+summary(seg_fit)
+
+# Get the breakpoint
+bp <- summary(seg_fit)$psi[1]
+
+# Create predictions
+newdat2 <- data.frame(disturbance_index = seq(min(df$disturbance_index),
+                                              max(df$disturbance_index),
+                                              length.out = 200))
+newdat2$pred <- predict(seg_fit, newdata = newdat2)
+
+# Plot
+ggplot(df, aes(disturbance_index, yoy)) +
+  geom_point(alpha = 0.4) +
+  geom_line(data = newdat2, aes(y = pred), color = "firebrick", size = 1.2) +
+  geom_vline(xintercept = bp, linetype = "dashed", color = "gray40") +
+  annotate("text", x = bp, y = max(df$yoy, na.rm = TRUE),
+           label = paste("Breakpoint ≈", round(bp, 2)), vjust = -1) +
+  labs(x = "Disturbance index", y = "Fawn detections") +
+  theme_classic()
+
+
+m2_quad <- glmmTMB::glmmTMB(
+  yoy ~ disturbance_index + I(disturbance_index^2) + (1|array),
+  family = poisson,
+  data = df
+)
+
+summary(m2_quad)
+
+newdat <- newdat %>%
+  mutate(
+    fit_link = preds$fit,
+    se_link  = preds$se.fit,
+    fit_resp = exp(fit_link),
+    lower    = exp(fit_link - 1.96 * se_link),
+    upper    = exp(fit_link + 1.96 * se_link)
+  )
+
+# Plot
+ggplot(newdat, aes(x = disturbance_index, y = fit_resp)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, fill = "steelblue") +
+  geom_line(color = "steelblue", size = 1.2) +
+  labs(
+    x = "Disturbance index",
+    y = "Predicted fawn detections",
+    title = "Quadratic relationship between disturbance and fawn detections"
+  ) +
+  theme_classic()
+
+```
