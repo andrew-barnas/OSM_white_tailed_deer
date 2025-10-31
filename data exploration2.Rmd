@@ -1,0 +1,318 @@
+The purpose of this file is some data exploration on deers
+
+
+```{r}
+#Clear everything out and start fresh
+rm(list=ls())
+library(reproducible) #setting up directories for data management
+library(readr)        #Needed to read and merge all the csv's in the camera folder
+library(dplyr)        #data wranglin'
+library(lubridate)    #datetime manipulation
+library(tidyr)        #more data manipulation
+library(stringr)      #detecting character strings
+library(ggplot2)      #data visualization
+library(purrr)        #feline-friendly loops 
+
+
+#This just sets up files for inputs (already created, must contain your files), and outputs
+input_directory<-reproducible::checkPath(file.path(getwd(), "inputs"), create = TRUE)
+output_directory<-reproducible::checkPath(file.path(getwd(), "outputs"), create = TRUE)
+figure_directory<-reproducible::checkPath(file.path(getwd(), "figures"), create = TRUE)
+
+
+#read in the files we need
+dets<-read.csv(file.path(input_directory, "OSM_camera_detections.csv"))
+camop<-read.csv(file.path(input_directory, "OSM_camera_deployment.csv"))
+covs<-read.csv(file.path(input_directory, "OSM_camera_covariates.csv"))
+
+#And the weather data
+weather<-read.csv(file.path(input_directory, "daymet_weather_data.csv"))
+
+```
+
+Lets first work on our response variable. This will be counts of independent detections in the months of may, june, july, and august each year. We will need a cutoff though to only use cameras that were operational for the full time slice each year.
+```{r}
+
+#First, filter the cameras to look only at those that had operation within the months of may, june, july, and august each year.
+dets_summer<-dets%>%
+  filter(month(datetime) %in% 5:8)%>%
+  mutate(year = year(datetime))
+  
+dets_summer_operability <- dets %>%
+  # keep only May–August
+  filter(month(datetime) %in% 5:8) %>%
+  #Add in a specific date and year column
+   mutate(
+    date = as_date(datetime),
+    year = year(datetime)
+  ) %>%
+  group_by(site, year) %>%
+  # count unique dates per site-year -> this will be the number of operating days!
+  summarise(
+    n_days = n_distinct(date),
+    min_date = min(date),
+    max_date = max(date),
+    .groups = "drop"
+  )
+
+#Add a plot here for camera operability in the future
+
+##Now lets work on independent detections of white tailed deer
+#Note we did not filter to deer above, as we wanted to calculate full operability first!
+wtd<-dets%>%
+  filter(month(datetime) %in% 5:8)%>%
+  filter(species == "White-tailed deer")%>%
+  #Just ensuring its read in as a datetime here!
+  mutate(datetime = ymd_hms(datetime))
+
+
+#arrange the detection by site, species, and time, then group by site
+wtd<-wtd%>%
+  arrange(array, site, datetime)%>%
+  group_by(site)%>%
+  #Create a lag time that will be used to calculate time differences
+   mutate(duration = as.numeric(difftime(datetime,lag(datetime),units = "mins")))
+
+
+#Set up the framework for assigning unique IDs
+wtd$Event.ID<-9999 #This is just an arbitrary event identification code
+mins<-2 # THIS IS THE DETECTION EVENT BREAK-POINT YOU CAN CHANGE
+seq <- as.numeric(paste0(nrow(wtd),0))
+seq <- round(seq,-(nchar(seq)))
+
+#This will go through each row and figure out how far apart in time each one is
+#So this creates unique event identifications for subsequent rows IF they are more than 30mins apart
+for (i in 2:nrow(wtd)) {
+ wtd$Event.ID[i-1]  <- paste0("E",format(seq, scientific = F))
+  if(is.na(wtd$duration[i]) | abs(wtd$duration[i]) > mins){
+    seq <- seq + 1 
+  }
+}
+
+# Update the information for the last row
+# group ID  for the last row
+if(wtd$duration[nrow(wtd)] < mins| 
+   is.na(wtd$duration[nrow(wtd)])){
+  wtd$Event.ID[nrow(wtd)] <- wtd$Event.ID[nrow(wtd)-1] 
+} else{
+  wtd$Event.ID[nrow(wtd)] <- paste0("E",format(seq+1, scientific = F)) 
+}
+
+# Subset to just top rows to get independent detections.
+
+# Note: This is a critical step to make a decision on how we filter this - don't want to loose data by just taking first row when there are multiple rows of data in a detection? Just want to sum? take highest? THINK SYD
+
+#Want to make sure at the end of this we still have the same number of independent detections!
+wtd_ind_test<-wtd %>%
+  group_by(Event.ID) %>% 
+  filter(row_number()==1)%>%
+  ungroup()
+
+###############################################################
+#Now lets figure out how many of these independent detections were those of lone adults vs adults with offspring
+#I am going to make an assumption that detections of offspring without adults, actually were with adults. Since the chances of just having a random offspring running around without an adult is likely rare
+
+#Lets reduce this down to the information we want
+wtd<-wtd%>%
+  dplyr::select(array, site, datetime, female, yoy, Event.ID)
+
+#Second, since we don't care about absolute number of deer in events, we are going to turn things into binary present or absent. 
+
+#First turn those NAs into zeros
+wtd <- wtd %>%
+  mutate(across(c(female, yoy),
+                ~ ifelse(is.na(.x) | .x == 0, 0, 1)))
+
+#Next, for event ID lets identify if a yoy was present or if a female was present
+wtd<-wtd %>%
+  group_by(Event.ID) %>%
+  mutate(
+    # Whether any yoy = 1 within the event
+    yoy_present = as.integer(any(yoy == 1, na.rm = TRUE)),
+    
+    # Whether ONLY females were present (female = 1 somewhere, but no yoy = 1 anywhere)
+    female_only = as.integer(any(female == 1, na.rm = TRUE) & !any(yoy == 1, na.rm = TRUE))
+  ) %>%
+  ungroup()
+
+#Finally, lets reduce to one row per event, and filter out events with zeros for both categories (these would represent males and stuff)
+wtd<-wtd%>%
+  group_by(Event.ID)%>%
+  filter(row_number()==1)%>%
+  filter(!(yoy_present == 0 & female_only == 0))%>%
+  ungroup()
+
+#how many sites/years - this matches the next step so we are good
+wtd%>%
+  mutate(year = year(datetime))%>%
+  group_by(year)%>%
+  summarise(n_sites = n_distinct(site))
+
+#And now lets calculate the number of events per site per year
+wtd<-wtd%>%
+  mutate(year = year(datetime))%>%
+  group_by(year, site)%>%
+  summarise(n_yoy = sum(yoy_present),
+            n_female = sum(female_only))%>%
+  arrange(site)
+
+#Ok now remember one thing that will be missing here is sites that had zero and zero. We can get this list from the dets_summer_operability. This represents the number of sites per year that were operated
+dets_summer_operability%>%
+  group_by(year)%>%
+  summarise(n_obs = n_distinct(site))
+
+#And this represents the number of sites per year that had a deer deteciton we care about.
+#see how its much lower, we need to add in the true zeros from the cameras we know were on but did not detect deer 
+wtd%>%
+  group_by(year)%>%
+  summarise(n_obs = n_distinct(site))
+
+#This will merge the dataframes, and leave NAs for the cameras where no deer were detected. We will simply then replace the NAs with zeros
+wtd<-merge(dets_summer_operability,
+wtd, all.x = TRUE)%>%
+  mutate(n_yoy = ifelse(is.na(n_yoy), 0, n_yoy),
+         n_female = ifelse(is.na(n_female), 0, n_female))
+
+#And finally, lets add coordinates for each site in
+wtd<-merge(wtd, 
+      camop%>%
+      dplyr::select(array, site, lat, long),
+      by = c("site"), all.x = TRUE)
+
+#And last, lets compute an "index" of detections by accounting for camera trap days
+wtd<-wtd%>%
+  mutate(yoy_index = n_yoy/n_days,
+         female_index = n_female/n_days)
+
+#Some baby data exploration
+ggplot(wtd, aes(x = female_index))+
+  geom_histogram(fill = "grey", color = "black")+
+  xlab("Adult female detections per camera day")
+
+ggplot(wtd, aes(x = yoy_index))+
+  geom_histogram(fill = "grey", color = "black")+
+  xlab("YOY detections per camera day")
+
+
+
+
+```
+
+
+
+Adding in landscape disturbance
+```{r}
+
+#temporary for messing around
+df<-wtd
+
+
+#Ok lets work on the covariates. I am just going to make a broad disturbance index for each site
+#at 1000m reflecting the camera spacing
+covs<-covs%>%
+  filter(buff_dist == 1000)%>%
+  #remove the habitat classifications
+  dplyr::select(-c(lc_class110, lc_class120, lc_class20, lc_class210, lc_class220, lc_class230, lc_class32, lc_class33, lc_class34, lc_class50))
+
+#Create a sum across columns 4 to 50
+covs<-covs%>%
+  mutate(disturbance_index = rowSums(across(4:50)))%>%
+  dplyr::select(array, site, disturbance_index)
+
+ggplot(covs, aes(x = disturbance_index))+
+  geom_histogram()+
+  facet_wrap(~array)
+
+#Lets link that into the detection file
+df<-merge(df, covs, by = c("site", "array"))
+
+#quick and dirty data exploration
+ggplot(df, aes(x = disturbance_index, y = female_index, color = array))+
+  geom_point(size = 3)+
+  ylab("Female detection index")+
+  xlab("Disturbance index")+
+  ggtitle("Females ~ disturbance")
+
+ggplot(df, aes(x = disturbance_index, y = yoy_index, color = array))+
+  geom_point(size = 3)+
+  ylab("YOY detection index")+
+  xlab("Disturbance index")+
+  ggtitle("YOY~ disturbance")
+
+
+
+#Ok now link that into the detection files
+females_spatial<-merge(covs, females_spatial, by = c("site"))
+fawns_spatial<-merge(covs, fawns_spatial, by = c("site"))
+
+#This is stupid lets make this into one frame
+df<-merge(females_spatial%>%rename(females = n_events),
+fawns_spatial%>%rename(yoy = n_events))
+
+ggplot(df, aes(x = disturbance_index, y = females, color = array))+
+  geom_point(size = 3)+
+  ylab("Female detections")+
+  xlab("Disturbance index")+
+  ggtitle("Females ~ disturbance")
+
+ggplot(df, aes(x = disturbance_index, y = yoy, color = array))+
+  geom_point(size = 3)+
+  ylab("YOY detections")+
+  xlab("Disturbance index")+
+  ggtitle("Fawns ~ disturbance")
+
+#A couple quick data transformations
+hist(df$females)
+
+
+#Quick models
+m1<-glmmTMB::glmmTMB(females ~ disturbance_index + (1|array),
+                 family = poisson,
+                 data = df)
+summary(m1)
+
+
+#Quick models
+m2<-glmmTMB::glmmTMB(yoy ~ disturbance_index + (1|array),
+                 family = poisson,
+                 data = df)
+summary(m2)
+
+
+
+
+```
+
+
+Ok we now have a dataframe of deer detections or whatever, now lets try to get some climate data in
+```{r}
+#dataframe
+df
+
+#weather stuff
+weather
+
+
+#So first things first, lets keep life simple and just look at temperature and snow
+weather<-weather%>%
+  dplyr::select(c(site, latitude, longitude, year, day, max_temp_C, snow_water_equiv_kgM2))
+
+#And I am pretty sure we will need to get those dates read in nicely
+weather <- weather %>%
+  mutate(date = ymd(paste0(year, "-01-01")) + days(day - 1))
+
+#Interesting. quick plot?
+weather%>%
+  group_by(date)%>%
+  summarise(mean_snow = mean(snow_water_equiv_kgM2),
+            sd_snow = sd(snow_water_equiv_kgM2))%>%
+  ggplot(aes(x = date))+
+  geom_ribbon(aes(ymin = mean_snow - sd_snow, ymax = mean_snow + sd_snow), fill = "grey70") +
+  geom_line(aes(y = mean_snow))+
+  ggtitle("snow water equivalent")
+
+
+
+
+
+```
