@@ -240,53 +240,12 @@ ggplot(df, aes(x = disturbance_index, y = yoy_index, color = array))+
   ggtitle("YOY~ disturbance")
 
 
-
-#Ok now link that into the detection files
-females_spatial<-merge(covs, females_spatial, by = c("site"))
-fawns_spatial<-merge(covs, fawns_spatial, by = c("site"))
-
-#This is stupid lets make this into one frame
-df<-merge(females_spatial%>%rename(females = n_events),
-fawns_spatial%>%rename(yoy = n_events))
-
-ggplot(df, aes(x = disturbance_index, y = females, color = array))+
-  geom_point(size = 3)+
-  ylab("Female detections")+
-  xlab("Disturbance index")+
-  ggtitle("Females ~ disturbance")
-
-ggplot(df, aes(x = disturbance_index, y = yoy, color = array))+
-  geom_point(size = 3)+
-  ylab("YOY detections")+
-  xlab("Disturbance index")+
-  ggtitle("Fawns ~ disturbance")
-
-#A couple quick data transformations
-hist(df$females)
-
-
-#Quick models
-m1<-glmmTMB::glmmTMB(females ~ disturbance_index + (1|array),
-                 family = poisson,
-                 data = df)
-summary(m1)
-
-
-#Quick models
-m2<-glmmTMB::glmmTMB(yoy ~ disturbance_index + (1|array),
-                 family = poisson,
-                 data = df)
-summary(m2)
-
-
-
-
 ```
 
 
-Ok we now have a dataframe of deer detections or whatever, now lets try to get some climate data in
+Climate data
 ```{r}
-#dataframe
+#dataframe of deer detections and disturbance index
 df
 
 #weather stuff
@@ -296,6 +255,7 @@ weather
 #So first things first, lets keep life simple and just look at temperature and snow
 weather<-weather%>%
   dplyr::select(c(site, latitude, longitude, year, day, max_temp_C, snow_water_equiv_kgM2))
+
 
 #And I am pretty sure we will need to get those dates read in nicely
 weather <- weather %>%
@@ -312,7 +272,134 @@ weather%>%
   ggtitle("snow water equivalent")
 
 
+#Ok lets pick an arbitrary winter period. Lets say october to february?
+#First just keep data in those months
+weather<-weather%>%
+  filter(month(date) %in% c(10, 11, 12, 1, 2))
+  
+
+#Ok ok. Now remember, the weather dataframe has data for all sites for all years. But we don't need that 
+weather_summary <- weather %>%
+  # Extract month for filtering
+  mutate(month = month(date),
+         # Define "winter_year" = the year that the winter *starts*
+         winter_year = if_else(month >= 10, year(date), year(date) - 1)) %>%
+  
+  # Keep only October through February
+  filter(month %in% c(10, 11, 12, 1, 2)) %>%
+  
+  # Group by site and winter season
+  group_by(site, winter_year) %>%
+  
+  # Summarize mean and sd for each variable
+  summarise(
+    mean_temp = mean(max_temp_C, na.rm = TRUE),
+    sd_temp   = sd(max_temp_C, na.rm = TRUE),
+    mean_swe  = mean(snow_water_equiv_kgM2, na.rm = TRUE),
+    sd_swe    = sd(snow_water_equiv_kgM2, na.rm = TRUE),
+    n_days    = n(),  # optional — good to check how many days were available
+    .groups = "drop"
+  )
+
+#Filter and check the summaries
+weather_summary<-weather_summary%>%
+  filter(!winter_year %in% c(2019, 2024))
+
+#I need to understand this, why some are 150 days, some are 151, and other 152...
+#IGNORING FOR NOW
+ggplot(weather_summary, aes(x = n_days))+
+  geom_histogram()
 
 
+#Ok now we need to add the right winter year in for each detection thing
+#So if the year in the detection is 2021, we want winter year 2020
+df_joined <- df %>%
+  mutate(winter_year = year - 1) %>%   # winter before the summer field season
+  left_join(
+    weather_summary %>%
+      rename_with(~ paste0("winter_", .), c(mean_temp, sd_temp, mean_swe, sd_swe, n_days)),
+    by = c("site" = "site", "winter_year" = "winter_year")
+  )
+
+#Quick and dirty plots?
+ggplot(df_joined, aes(x = winter_mean_temp, y = female_index, color = array))+
+  geom_point(size = 3)+
+  ylab("Female detection index")+
+  xlab("winter_temp")+
+  ggtitle("Females ~ winter temp")
+
+ggplot(df_joined, aes(x = winter_mean_temp, y = yoy_index, color = array))+
+  geom_point(size = 3)+
+  ylab("YOY detection index")+
+  xlab("winter_temp")+
+  ggtitle("yoy ~ winter temp")
+
+
+
+ggplot(df_joined, aes(x = winter_mean_swe, y = female_index, color = array))+
+  geom_point(size = 3)+
+  ylab("Female detection index")+
+  xlab("snow")+
+  ggtitle("Females ~ snow")
+
+ggplot(df_joined, aes(x = winter_mean_swe, y = yoy_index, color = array))+
+  geom_point(size = 3)+
+  ylab("YOY detection index")+
+  xlab("snow")+
+  ggtitle("yoy ~ snow")
+
+```
+
+
+Cheeky first pass models
+```{r}
+
+#scale variables of interest
+df_joined<-df_joined%>%
+  mutate(scale_max_temp = scale(winter_mean_temp),
+         scale_snow = scale(winter_mean_swe),
+         scale_disturbance = scale(disturbance_index))
+hist(df_joined$scale_max_temp)
+hist(df_joined$scale_snow)
+hist(df_joined$scale_disturbance)
+
+
+#Quick global model for adults
+m1<-glmmTMB::glmmTMB(n_female ~ scale_disturbance + scale_snow + scale_disturbance*scale_snow+
+                   (1|array) + (1|year)+
+                  offset(log(n_days)),
+                 family = poisson(),
+                 data = df_joined)
+summary(m1)
+
+m2<-glmmTMB::glmmTMB(n_yoy ~ scale_disturbance + scale_snow + scale_disturbance*scale_snow+
+                   (1|array) + (1|year)+
+                  offset(log(n_days)),
+                 family = poisson(),
+                 data = df_joined)
+summary(m2)
+
+lowQ  <- quantile(df_joined$scale_disturbance, 0.25, na.rm = TRUE)
+highQ <- quantile(df_joined$scale_disturbance, 0.75, na.rm = TRUE)
+
+# Generate predictions across the range of snow, at low and high disturbance
+pred_m2 <- ggpredict(
+  m2,
+  terms = c("scale_snow", 
+            paste0("scale_disturbance [", round(lowQ, 2), ",", round(highQ, 2), "]")),
+   condition = c(n_days = 1) #represent a single camera day
+)
+
+# Plot
+ggplot(pred_m2, aes(x = x, y = predicted, colour = group)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = group), alpha = 0.2, colour = NA) +
+  labs(
+    x = "Scaled snow",
+    y = "Predicted number of YOY detections (per camera-day)",
+    colour = "Disturbance (quartile)",
+    fill = "Disturbance (quartile)"
+  ) +
+  theme_minimal(base_size = 14)
 
 ```
