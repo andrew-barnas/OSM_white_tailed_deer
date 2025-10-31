@@ -202,6 +202,14 @@ ggplot(wtd, aes(x = yoy_index))+
 
 Adding in landscape disturbance
 ```{r}
+#I need to go through the covariate list and classify them either as polygonal or linear or unknown
+covs<-covs%>%
+  mutate(polygonal_sum = borrowpits + clearing_wellpad_unconfirmed + crop + facility_other + golfcourse + harvest_area + lagoon + mines_oilsands + oil_gas_plant + residence_clearing + ris_camp_industrial + ris_facility_operations + well_bitumen + well_cleared_not_drilled + well_other + borrowpit_dry + camp_industrial + cultivation_abandoned + facility_unknown + harvest_area_white_zone + landfill + mines_pitlake + open_pit_mine + ris_clearing_unknown + ris_overburden_dump + ris_tailing_pond + rural_residence + tailing_pond + transfer_station + urban_industrial + well_cased + well_gas + well_unknown + borrowpit_wet + campground + clearing_unknown + country_residence + dugout + grvl_sand_pit + mill + misc_oil_gas_facility + reservoir + ris_borrowpits + ris_mines_oilsands + ris_plant + rough_pasture + tame_pasture + urban_residence + well_aband + well_cleared_not_confirmed + well_oil,
+         
+         linear_sum = pipeline + ris_transmission_line + rlwy_sgl_track + road_gravel_1l + road_gravel_2l + road_paved_1l + road_paved_2l + road_paved_3l + road_paved_4l + road_paved_5l + road_paved_div + road_paved_undiv_1l + road_paved_undiv_2l + runway + trail + truck_trail + vegetated_edge_railways  + conventional_seismic + low_impact_seismic + ris_airp_runway + ris_road + rlwy_dbl_track + rlwy_spur + vegetated_edge_roads + rlwy_mlt_track + transmission_line)
+         
+
+
 
 #temporary for messing around
 df<-wtd
@@ -211,33 +219,33 @@ df<-wtd
 #at 1000m reflecting the camera spacing
 covs<-covs%>%
   filter(buff_dist == 1000)%>%
+  #Lets hang on to a couple of these habitat variables
+  rename(grassland = lc_class110,
+         broadleaf = lc_class220)%>%
   #remove the habitat classifications
-  dplyr::select(-c(lc_class110, lc_class120, lc_class20, lc_class210, lc_class220, lc_class230, lc_class32, lc_class33, lc_class34, lc_class50))
+  dplyr::select(-c(lc_class120, lc_class20, lc_class210, lc_class230, lc_class32, lc_class33, lc_class34, lc_class50))
 
 #Create a sum across columns 4 to 50
 covs<-covs%>%
-  mutate(disturbance_index = rowSums(across(4:50)))%>%
-  dplyr::select(array, site, disturbance_index)
+  dplyr::select(array, site, grassland, broadleaf, polygonal_sum, linear_sum)
 
-ggplot(covs, aes(x = disturbance_index))+
-  geom_histogram()+
-  facet_wrap(~array)
+
 
 #Lets link that into the detection file
 df<-merge(df, covs, by = c("site", "array"))
 
 #quick and dirty data exploration
-ggplot(df, aes(x = disturbance_index, y = female_index, color = array))+
-  geom_point(size = 3)+
-  ylab("Female detection index")+
-  xlab("Disturbance index")+
-  ggtitle("Females ~ disturbance")
-
-ggplot(df, aes(x = disturbance_index, y = yoy_index, color = array))+
-  geom_point(size = 3)+
-  ylab("YOY detection index")+
-  xlab("Disturbance index")+
-  ggtitle("YOY~ disturbance")
+# ggplot(df, aes(x = disturbance_index, y = female_index, color = array))+
+#   geom_point(size = 3)+
+#   ylab("Female detection index")+
+#   xlab("Disturbance index")+
+#   ggtitle("Females ~ disturbance")
+# 
+# ggplot(df, aes(x = disturbance_index, y = yoy_index, color = array))+
+#   geom_point(size = 3)+
+#   ylab("YOY detection index")+
+#   xlab("Disturbance index")+
+#   ggtitle("YOY~ disturbance")
 
 
 ```
@@ -353,45 +361,86 @@ ggplot(df_joined, aes(x = winter_mean_swe, y = yoy_index, color = array))+
 
 Cheeky first pass models
 ```{r}
-
-#scale variables of interest
-df_joined<-df_joined%>%
-  mutate(scale_max_temp = scale(winter_mean_temp),
-         scale_snow = scale(winter_mean_swe),
-         scale_disturbance = scale(disturbance_index))
-hist(df_joined$scale_max_temp)
-hist(df_joined$scale_snow)
-hist(df_joined$scale_disturbance)
-
-
-#Quick global model for adults
-m1<-glmmTMB::glmmTMB(n_female ~ scale_disturbance + scale_snow + scale_disturbance*scale_snow+
+#just throwing shit at the wall here
+m1<-glmmTMB::glmmTMB(n_female ~ wells*winter_mean_swe+
                    (1|array) + (1|year)+
                   offset(log(n_days)),
                  family = poisson(),
                  data = df_joined)
 summary(m1)
 
-m2<-glmmTMB::glmmTMB(n_yoy ~ scale_disturbance + scale_snow + scale_disturbance*scale_snow+
+
+
+
+
+#scale variables of interest
+df_joined<-df_joined%>%
+  mutate(scale_max_temp = scale(winter_mean_temp),
+         scale_snow = scale(winter_mean_swe),
+         scale_polygonal = scale(polygonal_sum),
+         scale_broadleaf = scale(broadleaf),
+         scale_linear = scale(linear_sum))
+
+hist(df_joined$scale_polygonal)
+hist(df_joined$scale_linear)
+hist(df_joined$scale_broadleaf)
+hist(df_joined$scale_snow)
+
+#correlation tests?
+# Select your variables
+vars <- df_joined %>%
+  dplyr::select(scale_max_temp, scale_snow, scale_polygonal, scale_linear, scale_broadleaf)
+
+# Compute correlation matrix (use complete.obs to ignore NAs)
+cor_matrix <- cor(vars, use = "complete.obs")
+
+# Print the correlation matrix
+print(round(cor_matrix, 2))
+
+# Visualize it
+corrplot(cor_matrix, method = "color", type = "upper", 
+         tl.col = "black", tl.srt = 45, addCoef.col = "black")
+
+
+#Quick global model for adults
+m1<-glmmTMB::glmmTMB(n_female ~ scale_snow + scale_linear + scale_polygonal + scale_broadleaf +
+                   (1|array) + (1|year)+
+                  offset(log(n_days)),
+                 family = poisson(),
+                 data = df_joined)
+summary(m1)
+
+
+m2<-glmmTMB::glmmTMB(n_female ~ scale_snow + scale_linear + scale_polygonal + scale_broadleaf + scale_snow*scale_polygonal+
                    (1|array) + (1|year)+
                   offset(log(n_days)),
                  family = poisson(),
                  data = df_joined)
 summary(m2)
 
-lowQ  <- quantile(df_joined$scale_disturbance, 0.25, na.rm = TRUE)
-highQ <- quantile(df_joined$scale_disturbance, 0.75, na.rm = TRUE)
+
+m3<-glmmTMB::glmmTMB(n_yoy ~ scale_snow + scale_linear + scale_polygonal + scale_broadleaf + scale_snow*scale_polygonal+
+                   (1|array) + (1|year)+
+                  offset(log(n_days)),
+                 family = poisson(),
+                 data = df_joined)
+summary(m3)
+
+
+
+lowQ  <- quantile(df_joined$scale_polygonal, 0.25, na.rm = TRUE)
+highQ <- quantile(df_joined$scale_polygonal, 0.75, na.rm = TRUE)
 
 # Generate predictions across the range of snow, at low and high disturbance
-pred_m2 <- ggpredict(
-  m2,
+pred_m3 <- ggpredict(
+  m3,
   terms = c("scale_snow", 
-            paste0("scale_disturbance [", round(lowQ, 2), ",", round(highQ, 2), "]")),
+            paste0("scale_polygonal [", round(lowQ, 2), ",", round(highQ, 2), "]")),
    condition = c(n_days = 1) #represent a single camera day
 )
 
 # Plot
-ggplot(pred_m2, aes(x = x, y = predicted, colour = group)) +
+ggplot(pred_m3, aes(x = x, y = predicted, colour = group)) +
   geom_line(size = 1.2) +
   geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = group), alpha = 0.2, colour = NA) +
   labs(
