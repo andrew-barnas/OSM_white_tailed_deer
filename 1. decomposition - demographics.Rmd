@@ -1,0 +1,865 @@
+The purpose of this file is to do the setup of the response varible for deer? Lets do this clean. 
+
+
+```{r}
+#Clear everything out and start fresh
+rm(list=ls())
+library(reproducible) #setting up directories for data management
+library(readr)        #Needed to read and merge all the csv's in the camera folder
+library(dplyr)        #data wranglin'
+library(lubridate)    #datetime manipulation
+library(tidyr)        #more data manipulation
+library(stringr)      #detecting character strings
+library(ggplot2)      #data visualization
+library(purrr)        #feline-friendly loops 
+library(corrplot)     #correlation tests
+
+
+#This just sets up files for inputs (already created, must contain your files), and outputs
+input_directory<-reproducible::checkPath(file.path(getwd(), "inputs"), create = TRUE)
+output_directory<-reproducible::checkPath(file.path(getwd(), "outputs"), create = TRUE)
+figure_directory<-reproducible::checkPath(file.path(getwd(), "figures"), create = TRUE)
+
+
+#read in the files we need
+dets<-read.csv(file.path(input_directory, "OSM_camera_detections.csv"))
+camop<-read.csv(file.path(input_directory, "OSM_camera_deployment.csv"))
+covs<-read.csv(file.path(input_directory, "OSM_camera_covariates.csv"))
+
+#And the weather data
+weather<-read.csv(file.path(input_directory, "daymet_weather_data.csv"))
+weather_10<-read.csv(file.path(input_directory, "daymet_weather_data_10year.csv"))
+
+
+```
+
+
+First, lets explore when and where our detections of deer were. 
+```{r}
+#First, I want to know when deer were detected, this is going to influence when and where we look for deer
+wtd<-dets%>%
+  filter(species == "White-tailed deer")%>%
+  #Just ensuring its read in as a datetime here!
+  mutate(datetime = ymd_hms(datetime))
+
+
+#arrange the detection by site, species, and time, then group by site
+wtd<-wtd%>%
+  arrange(array, site, datetime)%>%
+  group_by(site)%>%
+  #Create a lag time that will be used to calculate time differences
+   mutate(duration = as.numeric(difftime(datetime,lag(datetime),units = "mins")))
+
+#Set up the framework for assigning unique IDs
+wtd$Event.ID<-9999 #This is just an arbitrary event identification code
+mins<-2 # THIS IS THE DETECTION EVENT BREAK-POINT YOU CAN CHANGE
+seq <- as.numeric(paste0(nrow(wtd),0))
+seq <- round(seq,-(nchar(seq)))
+
+#This will go through each row and figure out how far apart in time each one is
+#So this creates unique event identifications for subsequent rows IF they are more than 30mins apart
+for (i in 2:nrow(wtd)) {
+ wtd$Event.ID[i-1]  <- paste0("E",format(seq, scientific = F))
+  if(is.na(wtd$duration[i]) | abs(wtd$duration[i]) > mins){
+    seq <- seq + 1 
+  }
+}
+
+# Update the information for the last row
+# group ID  for the last row
+if(wtd$duration[nrow(wtd)] < mins| 
+   is.na(wtd$duration[nrow(wtd)])){
+  wtd$Event.ID[nrow(wtd)] <- wtd$Event.ID[nrow(wtd)-1] 
+} else{
+  wtd$Event.ID[nrow(wtd)] <- paste0("E",format(seq+1, scientific = F)) 
+}
+
+#Lets reduce this down to the information we want (too many columns to bring along!)
+wtd<-wtd%>%
+  dplyr::select(array, site, datetime, female, yoy, Event.ID)
+
+#Second, since we don't care about absolute number of deer in events, we are going to turn things into binary present or absent. 
+#First turn those NAs into zeros
+wtd <- wtd %>%
+  mutate(across(c(female, yoy),
+                ~ ifelse(is.na(.x) | .x == 0, 0, 1)))
+
+#Next, for event ID lets identify if a young was present or if a female was present
+wtd<-wtd %>%
+  group_by(Event.ID) %>%
+  mutate(
+    # Whether any yoy = 1 within the event
+    yoy_present = as.integer(any(yoy == 1, na.rm = TRUE)),
+    
+    # Whether ONLY females were present (female = 1 somewhere, but no yoy = 1 anywhere)
+    female_only = as.integer(any(female == 1, na.rm = TRUE) & !any(yoy == 1, na.rm = TRUE))
+  ) %>%
+  ungroup()
+
+#Finally, lets reduce to one row per event, and filter out events with zeros for both categories (these would represent males and stuff)
+wtd<-wtd%>%
+  group_by(Event.ID)%>%
+  filter(row_number()==1)%>%
+  filter(!(yoy_present == 0 & female_only == 0))%>%
+  ungroup()%>%
+  dplyr::select(-c(female, yoy))
+
+
+```
+
+
+Data exploration of independant events
+```{r}
+#How many ind detections
+nrow(wtd)
+#How many for each group?
+wtd%>%
+  #We can sum since they are all 1's
+  summarise(n_adult = sum(female_only),
+            n_young = sum(yoy_present))
+
+#How many sites?
+n_distinct(wtd$site)
+#Site occupancy?
+n_distinct(wtd$site)/n_distinct(dets$site)
+
+#What do detections look like throughout the year?
+#Ok so based on this, a good way to look at young deer would be from June to September each year!
+wtd%>%
+  mutate(month = month(datetime))%>%
+  group_by(month)%>%
+  summarise(n_female = sum(female_only),
+            n_young = sum(yoy_present))%>%
+  pivot_longer(names_to = "demographic_group",
+               cols = c("n_female", "n_young"))%>%
+  ggplot(aes(x = as.factor(month), y = value, fill = demographic_group))+
+  geom_bar(stat = "identity", position = position_dodge())+
+  ylab("Independent Detections")+
+  ggtitle("Detections of deer ~ month of year")
+
+
+
+
+
+
+```
+
+Lets continue to work on our response variable. A couple things need doing. I am going to stretch this into a weekly proportional binomial for each site. Monthly might be too coarse since only using four months. I need to 1) do this properly such that we only count a week as operational if it ran for all 7 days, and then 2) find a way to fill in true zeros
+```{r}
+
+#Lets first work on operability of cameras. We will first use the main detection frame as this has all the days of operation for all sites.
+#Filter down to june, july, august, and september of each year
+df<-dets%>%
+  mutate(month = month(datetime),
+         date = date(datetime))%>%
+  filter(month %in% 6:9)
+
+#Keep only unique dates for each array/site
+df<-df%>%
+  distinct(array, site, date)
+
+#Identify the year and week for each site, and only keep sites that had full weeks
+weekly_operation<-df%>%
+  mutate(year = year(date),
+         week = week(date))%>%
+  #Have to group by year as well, since some sites ran across several years
+  group_by(array, year, site, week)%>%
+  summarise(n_days = n_distinct(date))%>%
+  #Here we remove sites that didn't have full weeks
+  filter(n_days == 7)
+
+#How many sites is this? Nice nice nice
+n_distinct(weekly_operation$site)
+#How many weeks per site? 
+weekly_operation%>%
+  group_by(year, site)%>%
+  summarise(n_weeks = n_distinct(week))%>%
+  summarise(mean_weeks = mean(n_weeks),
+            sd_weeks = sd(n_weeks),
+            min_weeks = min(n_weeks),
+            max_weeks = max(n_weeks))
+
+####################################################################################
+#Now that we have a list of cameras with operation we can use, I need to identify how many detentions of each group, for each site/year/week combination
+
+#Lets create a temporary frame to work in so we don't have to re-run the independent detection loop again if needed
+wtd_dets<-wtd
+
+#First, filter our dataframe to the same months
+wtd_dets<-wtd_dets%>%
+  mutate(month = month(datetime))%>%
+  filter(month %in% 6:9)
+
+#Add the year and week columns we will need
+wtd_dets<-wtd_dets%>%
+  mutate(year = year(datetime),
+         week = week(datetime))
+
+#Ok now I think I can do this. Since each event with a yoy or lone female is indicated by just a 1 (presence), I should be able to sum occurrences for each year/site/week combination right?
+#REMEMBER - this will not account for double absences! Sites with zero young and zero adult will not be captured here. Address this next
+wtd_dets<-wtd_dets%>%
+  group_by(array, year, site, week)%>%
+  summarise(sum_yoy = sum(yoy_present),
+            sum_adult = sum(female_only))%>%
+  #And then take those sums, and turn them back into presence/absence again
+  #Remember just want to know for each week if a group was present!
+  mutate(across(c(sum_yoy, sum_adult),
+                ~ ifelse(is.na(.x) | .x == 0, 0, 1)))%>%
+  #rename for clarity
+  rename(yoy_present = sum_yoy,
+         adult_present = sum_adult)
+
+
+#And now, we can merge this with the weekly operation file.
+wtd_dets<-left_join(weekly_operation, wtd_dets, by = c("array", "year", "site", "week"))
+
+#And now, lets fill in the zeros for the weeks where neither a young or adult was detected
+wtd_dets<-wtd_dets%>%
+  mutate(yoy_present = ifelse(is.na(yoy_present), 0, yoy_present),
+         adult_present = ifelse(is.na(adult_present), 0, adult_present))
+
+#Math check, how many weeks?
+wtd_dets%>%
+  group_by(year, site)%>%
+  summarise(n_weeks = n_distinct(week))%>%
+  ungroup()%>%
+  summarise(total_weeks = sum(n_weeks))
+
+#And last step, for each array, site, and year --> how many weeks were sampled, and how many of those weeks had a detection of a young or an adult. Again, since young and adult are coded as present or absent, we can sum them up
+wtd_dets<-wtd_dets%>%
+  group_by(array, year, site)%>%
+  summarise(n_weeks = n_distinct(week),   #how many weeks for each site
+            n_young = sum(yoy_present),   #how many of those weeks had a young
+            n_adult = sum(adult_present)) #how many of those weeks had an adult
+
+
+
+#Can we visualize this nicely? Yes, but need to manipulate the frame a little bit for eas
+wtd_dets%>%
+  pivot_longer(cols = c(n_young, n_adult),
+               values_to = "n_present")%>%
+ggplot(aes(x = array, y = n_present / n_weeks, color = name))+
+  geom_jitter()+
+  ylab("Proportion Summer Weeks Present")+
+  xlab("Array")+
+  scale_color_discrete(
+    name = "Age Class",
+    labels = c("n_young" = "Fawns", "n_adult" = "Adults"))+
+  theme_classic()
+
+```
+
+##############################################################################
+
+Alright lets now work on our covariate file. I am going to keep things very simple for the time being. Just looking at a few 
+```{r}
+#I am going to reduce this to just a few key players
+n_distinct(covs$site)
+
+
+covs<-covs%>%
+  filter(buff_dist == 1000)%>%
+  rename(broadleaf = lc_class220)%>%
+  relocate(array, site, broadleaf)%>%
+  #remove the habitat classifications
+  select(-c(lc_class110, lc_class120, lc_class20, lc_class210, lc_class230, lc_class32, lc_class33, lc_class34, lc_class50))
+
+#Create a sum across columns 4 to 50
+covs<-covs%>%
+  mutate(disturbance_index = rowSums(across(5:50)))%>%
+  select(array, site, disturbance_index, broadleaf)
+
+
+hist(covs$disturbance_index)
+
+
+#Lets link that into the detection file
+wtd_dets<-merge(wtd_dets, covs, by = c("site", "array"))
+
+temp<-wtd_dets
+wtd_dets<-temp
+
+
+```
+
+Weather data. Ok there are a few different things that need doing in this block. Going to keep it all simple and just work with snow for now. But I need to build:
+1) RAW: For each site - the preceeding years mean snow data
+2) AVERAGE TEMPORAL: for each site, the average mean snow within an array in the preceeding year
+3) AVERAGE SPATIAL: for each site, the average mean snow for that site across the last 10 years
+4) ANOMALY: for each site the difference between the current data - temporal and - spatial.
+```{r}
+#So first things first, lets keep life simple and just look at snow
+weather_10<-weather_10%>%
+  dplyr::select(c(site, latitude, longitude, year, day, snow = snow_water_equiv_kgM2))
+
+#I would like a couple graphs here showing the time series for each variable
+#First lets get the dates read in nicely
+weather_10 <- weather_10 %>%
+  mutate(date = ymd(paste0(year, "-01-01")) + days(day - 1))
+
+weather_summary<-weather_10%>%
+  group_by(date)%>%
+  summarise(mean_snow = mean(snow),
+            sd_snow = sd(snow))
+
+#Snow Plot
+ggplot(weather_summary, aes(x = date)) +
+  geom_ribbon(
+    aes(ymin = mean_snow - sd_snow,
+        ymax = mean_snow + sd_snow),
+    fill = "grey", alpha = 0.6
+  ) +
+  geom_line(aes(y = mean_snow), color = "black", size = 1) +
+  ylab("Mean Snow Water Equivalent (kg)") +
+  xlab("Date") +
+  ggtitle("Daily Snow")+
+  theme_classic()
+
+######################################################################################
+#Ok, lets get these measures into the dataframe. Now, we want to think about lag times and whatnot. So lets extract 
+
+#First lets define the winter months (using guidance from Dickie et al which reports snow periods as Sep 1 to March 31) (Potentially rethink this since we use September data for fawns)
+winter_months<-c(9, 10, 11, 12, 1, 2, 3) 
+
+
+#Ok lets pick an arbitrary winter period. Lets say october to february?
+#First just keep data in those months
+weather_10<-weather_10%>%
+  filter(month(date) %in% winter_months)
+  
+
+#Ok ok. Now remember, the weather dataframe has data for all sites for all years. But we don't need that 
+weather_summary <- weather_10 %>%
+  # Extract month for filtering
+  mutate(month = month(date),
+         # Define "winter_year" = the year that the winter *starts*
+         winter_year = if_else(month >= 9, year(date), year(date) - 1)) %>%
+  
+  # Group by site and winter season
+  group_by(site, winter_year) %>%
+  
+  # Summarize mean and sd for each variable
+  summarise(
+    mean_snow  = mean(snow, na.rm = TRUE),
+    sd_snow    = sd(snow, na.rm = TRUE),
+    n_days    = n(),  # optional — good to check how many days were available
+    .groups = "drop"
+  )%>%
+  mutate(mean_snow = scale(mean_snow))
+
+#Ok so at this point I have the winter_year data for each site. Now I need to manipulate and decompose that data into what I need.
+
+#First, lets get the raw data into the wtd_dets dataframe
+#Identify the winter year to use
+wtd_dets<-wtd_dets%>%
+  mutate(winter_year = year - 1)
+
+wtd_dets<-wtd_dets%>%
+  left_join(weather_summary%>%
+  dplyr::select(site, winter_year, mean_snow), 
+  by = c("site", "winter_year"))
+
+#make sure that worked- no NAs!
+summary(wtd_dets$mean_snow)
+hist(wtd_dets$mean_snow)
+
+###########################################
+#Ok now the temporal component. For each site/year what was the average winter snow across its respective array.
+#To do this I will need to add array back into the weather data. My bad. I can get that from camop
+
+weather_summary<-weather_summary%>%
+  left_join(camop%>%
+  dplyr::select(site, array),
+  by = "site")%>%
+  relocate(array, site)
+
+#So this calculation is slightly different! Grouping by year to get an overall average!
+weather_summary%>%
+  group_by(winter_year)%>%
+  summarise(mean_snow_temporal = mean(mean_snow))
+
+
+#join it all up
+wtd_dets<-wtd_dets%>%
+  left_join(
+weather_summary%>%
+  group_by(winter_year)%>%
+  summarise(mean_snow_temporal = mean(mean_snow)),
+by = c("winter_year"))
+
+###################################################################
+#Average spatial - so now we are going to take a single site, and find the average over the last 10 years
+head(weather_summary)
+
+#This is slightly tricky though, because I need to find a date range for each site. I've got a rather clever idea. Lets take the winter year, and then calculate a min year 10 years before that
+site_years<-wtd_dets%>%
+  mutate(min_year = winter_year - 10)%>%
+  dplyr::select(site, winter_year, min_year)
+
+site_10_year_snow<-site_years %>%
+  left_join(weather_summary, by = "site") %>%
+  #determining which years to keep based on the winter years in both frames
+   #keep weather summary winter year if its greater than the minimum for its site
+   filter(winter_year.y >= min_year, 
+         #keep weather summary winter year if its less than the max for its site  
+         winter_year.y <= winter_year.x) %>%
+  group_by(site, winter_year = winter_year.x) %>%
+  summarise(mean_snow_spatial = mean(mean_snow, na.rm = TRUE), .groups = "drop")
+
+#And now we can join that in e z p z
+wtd_dets<-wtd_dets%>%
+  left_join(site_10_year_snow, by = c("site", "winter_year"))
+
+############################################################################
+#Winter anomaly!
+
+#This one should be easier I think to calculate as I am pretty sure it is just the difference between the raw and the time minus space
+wtd_dets<-wtd_dets%>%
+  mutate(snow_anomaly = mean_snow - mean_snow_temporal - mean_snow_spatial)
+
+hist(wtd_dets$snow_anomaly)
+hist(wtd_dets$mean_snow)
+hist(wtd_dets$mean_snow_temporal)
+hist(wtd_dets$mean_snow_spatial)
+
+
+
+
+```
+
+
+Lets do some quick model prep and modeling before lunch break
+```{r}
+#Lets scale the remaining predictors
+wtd_dets<-wtd_dets%>%
+  mutate(disturbance = scale(disturbance_index))
+
+#How do I keep losing lat/long??
+wtd_dets<-wtd_dets%>%
+  left_join(camop%>%
+              dplyr::select(site, lat, long),
+            by = "site")
+
+covs
+
+#I am sure things are correlated af but I dont care right now
+# Select your variables
+vars <- wtd_dets %>%
+  dplyr::select(mean_snow, mean_snow_temporal, mean_snow_spatial, snow_anomaly, disturbance, broadleaf)
+
+# Compute correlation matrix (use complete.obs to ignore NAs)
+cor_matrix <- cor(vars, use = "complete.obs")
+
+# Print the correlation matrix
+print(round(cor_matrix, 2))
+
+# Visualize it
+corrplot(cor_matrix, method = "color", type = "upper", 
+         tl.col = "black", tl.srt = 45, addCoef.col = "black")
+```
+
+Adult models
+```{r}
+#Who cares lets build
+disturbance_a<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks - n_adult)) ~
+                   disturbance +scale(lat) + broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(disturbance_a)
+snow_a<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks - n_adult)) ~
+                   mean_snow +scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(snow_a)
+
+temporal_a<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks - n_adult)) ~
+                   mean_snow_temporal + scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(temporal_a)
+
+spatial_a<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks - n_adult)) ~
+                   mean_snow_spatial + scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(spatial_a)
+
+
+anomaly_a<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks - n_adult)) ~
+                   snow_anomaly +scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(anomaly_a)
+
+snow_disturbance_a<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks - n_adult)) ~
+                   mean_snow*disturbance +scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(snow_disturbance_a)
+
+temporal_disturbance_a<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks - n_adult)) ~
+                   mean_snow_temporal*disturbance +scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(temporal_disturbance_a)
+
+spatial_disturbance_a<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks - n_adult)) ~
+                   mean_snow_spatial*disturbance +scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(spatial_disturbance_a)
+
+
+anomaly_disturbance_a<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks - n_adult)) ~
+                   snow_anomaly*disturbance +scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(anomaly_disturbance_a)
+
+library(MuMIn)
+ms_a<-model.sel(disturbance_a, snow_a, temporal_a, spatial_a, anomaly_a,
+          snow_disturbance_a, temporal_disturbance_a, spatial_disturbance_a, anomaly_disturbance_a,
+          rank = "AICc")
+
+ms_a<- as.data.frame(ms_a) %>%
+  # Add model names as a column
+  mutate(model = rownames(ms_a)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+
+View(ms_a)
+
+summary(spatial_a)
+
+
+```
+
+
+Young
+```{r}
+#Who cares lets build
+disturbance_y<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   disturbance +scale(lat) + broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(disturbance_y)
+snow_y<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   mean_snow +scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(snow_y)
+
+temporal_y<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   mean_snow_temporal + scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(temporal_y)
+
+spatial_y<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   mean_snow_spatial + scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(spatial_y)
+
+
+anomaly_y<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   snow_anomaly +scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(anomaly_y)
+
+snow_disturbance_y<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   mean_snow*disturbance +scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(snow_disturbance_y)
+
+temporal_disturbance_y<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   mean_snow_temporal*disturbance +scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(temporal_disturbance_y)
+
+spatial_disturbance_y<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   mean_snow_spatial*disturbance +scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(spatial_disturbance_y)
+
+
+anomaly_disturbance_y<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   snow_anomaly*disturbance +scale(lat) +broadleaf +
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(anomaly_disturbance_y)
+
+library(MuMIn)
+ms_y<-model.sel(disturbance_y, snow_y, temporal_y, spatial_y, anomaly_y,
+          snow_disturbance_y, temporal_disturbance_y, spatial_disturbance_y, anomaly_disturbance_y,
+          rank = "AICc")
+
+ms_y<- as.data.frame(ms_y) %>%
+  # Add model names as a column
+  mutate(model = rownames(ms_y)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+
+View(ms_y)
+
+
+```
+
+
+```
+
+
+
+
+Preparing the data for preliminary models
+```{r}
+#Lets scale the variables and then explore correlations
+temp<-temp%>%
+  mutate(across(
+    .cols = c(broadleaf, roads, wells, conventional_seismic, pipeline, mean_min_temp, mean_swe, mean_precip, snow_dif, temp_dif, precip_dif, snow_10_mean),
+    .fns = ~ as.numeric(scale(.x)),
+    .names = "scale_{.col}"
+  ))
+
+#Check for correlations
+# Select your variables
+vars <- temp %>%
+  dplyr::select(scale_broadleaf, scale_roads, scale_wells, scale_conventional_seismic, scale_pipeline, scale_mean_min_temp, scale_mean_swe, scale_mean_precip, snow_dif, temp_dif, precip_dif, snow_10_mean)
+
+# Compute correlation matrix (use complete.obs to ignore NAs)
+cor_matrix <- cor(vars, use = "complete.obs")
+
+# Print the correlation matrix
+print(round(cor_matrix, 2))
+
+# Visualize it
+corrplot(cor_matrix, method = "color", type = "upper", 
+         tl.col = "black", tl.srt = 45, addCoef.col = "black")
+
+#Alright precipitation is a bad guy. lets remove it
+temp<-temp%>%
+  dplyr::select(-c(scale_mean_precip, precip_df)
+
+
+```
+
+
+Its all come to down to this. Lets run some models baby
+```{r}
+
+#Variance estimates for year were super low, so not including those as a random effect
+
+#global model for adults and young to get started!
+m1<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf +
+                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_mean_min_temp + scale_mean_swe +
+                   (1|array) + (1|year),
+                 family = "binomial",
+                 data = temp)
+summary(m1)
+
+
+m1<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks-n_young)) ~ scale_broadleaf +
+                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_mean_min_temp + scale_mean_swe +
+                   (1|array),
+                 family = "binomial",
+                 data = temp)
+summary(m1)
+
+####################
+#interaction terms?
+m1<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf +
+                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_mean_min_temp + scale_mean_swe + scale_roads*scale_mean_min_temp +
+                   (1|array),
+                 family = "binomial",
+                 data = temp)
+summary(m1)
+
+
+m1<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks-n_young)) ~ scale_broadleaf +
+                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_mean_min_temp + scale_mean_swe + scale_pipeline*scale_mean_min_temp+
+                   (1|array),
+                 family = "binomial",
+                 data = temp)
+summary(m1)
+
+###################################
+#What about a nice straightforward interaction?
+m1<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks-n_young)) ~ scale_broadleaf +
+                   scale_wells*scale_mean_swe+
+                   (1|array),
+                 family = "binomial",
+                 data = temp)
+summary(m1)
+
+
+#What if we account for that north south gradient?
+#Adding the coordinates back in
+temp<-temp%>%
+  left_join(camop%>%
+  dplyr::select(site, lat, long),
+  by = c("site"))
+
+#Ok yea latitude is important for suresies
+m1<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf + lat +
+                   (1|array),
+                 family = "binomial",
+                 data = temp)
+
+summary(m1)
+
+
+m1<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf + lat + scale_mean_swe +
+                       scale_pipeline+
+                   (1|array),
+                 family = "binomial",
+                 data = temp)
+
+summary(m1)
+
+
+#Models with the difference stuff
+m1<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf + scale_snow_10_mean +
+                       scale_pipeline+ scale_snow_dif+
+                   (1|array),
+                 family = "binomial",
+                 data = temp)
+
+summary(m1)
+
+
+#Models with the difference stuff
+m1<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks-n_young)) ~ scale_broadleaf + scale_snow_10_mean + scale_snow_dif +
+                       scale_pipeline+
+                   (1|array),
+                 family = "binomial",
+                 data = temp)
+
+summary(m1)
+
+
+m1<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf + scale_snow_10_mean +
+                       scale_roads+ scale_snow_dif+
+                   (1|array),
+                 family = "binomial",
+                 data = temp)
+
+summary(m1)
+
+
+#Models with the difference stuff
+m1<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks-n_young)) ~ scale_broadleaf + scale_snow_10_mean + scale_snow_dif +
+                       scale_pipeline+
+                   (1|array),
+                 family = "binomial",
+                 data = temp)
+
+summary(m1)
+
+
+#Global
+m1<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf +
+                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_snow_10_mean + scale_snow_dif +
+                   (1|array) + (1|year),
+                 family = "binomial",
+                 data = temp)
+summary(m1)
+
+#Global
+m1<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks-n_young)) ~ scale_broadleaf +
+                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_snow_10_mean + scale_snow_dif +
+                   (1|array) + (1|year),
+                 family = "binomial",
+                 data = temp)
+summary(m1)
+
+
+
+#Global with interaction
+m1_adult<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf +
+                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_snow_10_mean + scale_snow_dif + scale_snow_10_mean*scale_roads + scale_snow_dif*scale_roads+
+                   (1|array),
+                 family = "binomial",
+                 data = temp)
+summary(m1)
+
+#Global with interaction
+m1_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks-n_young)) ~ scale_broadleaf +
+                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_snow_10_mean + scale_snow_dif +scale_snow_10_mean*scale_roads + scale_snow_dif*scale_roads+
+                   (1|array),
+                 family = "binomial",
+                 data = temp)
+summary(m1)
+
+# -----------------------------
+# 1. Predicted probabilities for adult-only model
+# -----------------------------
+roads_q <- quantile(temp$scale_roads, probs = c(0.25, 0.75), na.rm = TRUE)
+low_roads <- roads_q[1]
+high_roads <- roads_q[2]
+
+
+adult_pred_low <- ggpredict(m1_adult, terms = c("scale_snow_10_mean [all]", paste0("scale_roads [", round(low_roads, 2), "]")))
+adult_pred_low$road_level <- "Low Roads"
+
+adult_pred_high <- ggpredict(m1_adult, terms = c("scale_snow_10_mean [all]", paste0("scale_roads [", round(high_roads, 2), "]")))
+adult_pred_high$road_level <- "High Roads"
+
+adult_pred <- bind_rows(adult_pred_low, adult_pred_high)
+adult_pred$group <- "Adult Female"
+
+# -----------------------------
+# 3. Predicted probabilities for adult+young model
+# -----------------------------
+young_pred_low <- ggpredict(m1_young, terms = c("scale_snow_10_mean [all]", paste0("scale_roads [", round(low_roads, 2), "]")))
+young_pred_low$road_level <- "Low Roads"
+
+young_pred_high <- ggpredict(m1_young, terms = c("scale_snow_10_mean [all]", paste0("scale_roads [", round(high_roads, 2), "]")))
+young_pred_high$road_level <- "High Roads"
+
+young_pred <- bind_rows(young_pred_low, young_pred_high)
+young_pred$group <- "Adult + Young"
+
+pred_df <- bind_rows(adult_pred, young_pred)
+
+ggplot(pred_df, aes(x = x, y = predicted, color = road_level)) +
+  geom_line(size = 1) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = road_level), alpha = 0.2, color = NA) +
+  facet_wrap(~group) +
+  labs(
+    x = "Long-term Snow Load (10-year mean, scaled)",
+    y = "Predicted Probability of Detection",
+    color = "Road Density",
+    fill = "Road Density"
+  ) +
+  scale_color_manual(values = c("blue", "red")) +
+  scale_fill_manual(values = c("blue", "red")) +
+  theme_minimal(base_size = 14)
+```
