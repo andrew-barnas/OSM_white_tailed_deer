@@ -13,21 +13,26 @@ library(stringr)      #detecting character strings
 library(ggplot2)      #data visualization
 library(purrr)        #feline-friendly loops 
 library(corrplot)     #correlation tests
+library(factoextra)   #Principle Components Analysis
+library(rgl)
 
 
 #This just sets up files for inputs (already created, must contain your files), and outputs
-input_directory<-reproducible::checkPath(file.path(getwd(), "1. Species Response Variables/inputs"), create = TRUE)
-output_directory<-reproducible::checkPath(file.path(getwd(), "1. Species Response Variables/outputs"), create = TRUE)
-figure_directory<-reproducible::checkPath(file.path(getwd(), "1. Species Response Variables/figures"), create = TRUE)
+input_directory<-reproducible::checkPath(file.path(getwd(), "1. Species Response Variables/outputs"), create = TRUE)
+output_directory<-reproducible::checkPath(file.path(getwd(), "2. Site Variables/outputs"), create = TRUE)
+figure_directory<-reproducible::checkPath(file.path(getwd(), "2. Site Variables/figures"), create = TRUE)
 
 
 #read in the files we need
-dets<-read.csv(file.path(input_directory, "OSM_camera_detections.csv"))
-camop<-read.csv(file.path(input_directory, "OSM_camera_deployment.csv"))
-covs<-read.csv(file.path(input_directory, "OSM_camera_covariates.csv"))
+#This is from the species response variable file
+wtd_dets<-read.csv(file.path(input_directory, "weekly_proportional_binomial.csv"))
 
-#And the weather data
-weather<-read.csv(file.path(input_directory, "daymet_weather_data.csv"))
+#These are from the original input folder (fix later to be better)
+camop<-read.csv(file.path(getwd(), "1. Species Response Variables/inputs/OSM_camera_deployment.csv"))
+covs<-read.csv(file.path(getwd(), "1. Species Response Variables/inputs/OSM_camera_covariates.csv"))
+
+#And the weather data (needs to update)
+weather<-read.csv(file.path(getwd(), "1. Species Response Variables/inputs/daymet_weather_data.csv"))
 
 #I am reading this in from the desktop since it is too large to push to github
 weather_10<-read.csv("C:/Users/16043/Desktop/OSM white tailed deer/daymet_weather_data_10year.csv")
@@ -36,362 +41,47 @@ weather_10<-read.csv("C:/Users/16043/Desktop/OSM white tailed deer/daymet_weathe
 ```
 
 
-First, we need to calculate independent detections of deer and predator species of interest
+
+
+First thing I would like to do is construct a Principle Components Analysis of the habitat variables
 ```{r}
 
-#What predators do I want? I think lets just go with wolves for now. We can fancy things up later!
-unique(dets$species)
 
-#First, I want to know when deer were detected, this is going to influence when and where we look for deer
-wtd<-dets%>%
-  filter(species %in% c("White-tailed deer", "Grey wolf"))%>%
-  #Just ensuring its read in as a datetime here!
-  mutate(datetime = ymd_hms(datetime))
-
-
-#arrange the detection by site, species, and time, then group by site
-wtd<-wtd%>%
-  arrange(array, site, species, datetime)%>%
-  group_by(site)%>%
-  #Create a lag time that will be used to calculate time differences
-   mutate(duration = as.numeric(difftime(datetime,lag(datetime),units = "mins")))
-
-#Set up the framework for assigning unique IDs
-wtd$Event.ID<-9999 #This is just an arbitrary event identification code
-mins<-2 # THIS IS THE DETECTION EVENT BREAK-POINT YOU CAN CHANGE
-seq <- as.numeric(paste0(nrow(wtd),0))
-seq <- round(seq,-(nchar(seq)))
-
-#This will go through each row and figure out how far apart in time each one is
-#So this creates unique event identifications for subsequent rows IF they are more than 30mins apart
-for (i in 2:nrow(wtd)) {
- wtd$Event.ID[i-1]  <- paste0("E",format(seq, scientific = F))
-  if(is.na(wtd$duration[i]) | abs(wtd$duration[i]) > mins){
-    seq <- seq + 1 
-  }
-}
-
-# Update the information for the last row
-# group ID  for the last row
-if(wtd$duration[nrow(wtd)] < mins| 
-   is.na(wtd$duration[nrow(wtd)])){
-  wtd$Event.ID[nrow(wtd)] <- wtd$Event.ID[nrow(wtd)-1] 
-} else{
-  wtd$Event.ID[nrow(wtd)] <- paste0("E",format(seq+1, scientific = F)) 
-}
-
-#Ok I am going to do two things here. Calculate the independent detections of deer and other species normally, but I am going to set aside a dataframe that will just be used for deer demographics. Because there are lots of little things that need to be done for this
-
-
-#Lets make a dataframe for the deer demographics
-wtd_demographics<-wtd%>%
-  filter(species == "White-tailed deer")%>%
-  dplyr::select(array, site, species, datetime, female, yoy, Event.ID)
-  
-
-#And then a seperate one for just regular ole independent detections
-wtd<-wtd%>%
-  dplyr::select(array, site, species, datetime, Event.ID)
-
-#And I think at this point, just take the first observation for each event ID
-wtd<-wtd%>%
- group_by(Event.ID)%>%
-  slice(1)
-
-
-```
-
-
-Data exploration of independent events
-```{r}
-#How many ind detections
-wtd%>%
-  group_by(species)%>%
-  summarise(n_ind_dets = n())
-
-#How many sites?
-n_distinct(wtd$site)
-#Site occupancy?
-wtd%>%
-  group_by(species)%>%
-  summarise(n_sites = n_distinct(site),
-            naive_occupancy = n_sites/n_distinct(dets$site))
-
-
-#What do detections look like throughout the year?
-#Ok so based on this, a good way to look at young deer would be from June to September each year!
-wtd%>%
-  mutate(month = month(datetime))%>%
-  group_by(month, species)%>%
-  summarise(n_obs = n())%>%
-  ggplot(aes(x = as.factor(month), y = n_obs, flll = species))+
-  geom_bar(stat = "identity", aes(fill = species), position = position_dodge())+
-  ylab("Independent Detections")+
-  ggtitle("Species Detections ~ Month of Year")+
-  xlab("Month")
-
-
-
-
-
-
-```
-
-Lets continue to work on our response variable. A couple things need doing. I am going to stretch this into a weekly proportional binomial for each site. Monthly might be too coarse since only using four months. I need to 1) do this properly such that we only count a week as operational if it ran for all 7 days, and then 2) find a way to fill in true zeros
-```{r}
-
-#Lets first work on operability of cameras. We will first use the main detection frame as this has all the days of operation for all sites.
-#Filter down to june, july, august, and september of each year
-df<-dets%>%
-  mutate(month = month(datetime),
-         date = date(datetime))%>%
-  filter(month %in% 6:9)
-
-#Keep only unique dates for each array/site
-df<-df%>%
-  distinct(array, site, date)
-
-#Identify the year and week for each site, and only keep sites that had full weeks
-weekly_operation<-df%>%
-  mutate(year = year(date),
-         week = week(date))%>%
-  #Have to group by year as well, since some sites ran across several years
-  group_by(array, year, site, week)%>%
-  summarise(n_days = n_distinct(date))%>%
-  #Here we remove sites that didn't have full weeks
-  filter(n_days == 7)
-
-#How many sites is this? Nice nice nice
-n_distinct(weekly_operation$site)
-#How many weeks per site? 
-weekly_operation%>%
-  group_by(year, site)%>%
-  summarise(n_weeks = n_distinct(week))%>%
-  summarise(mean_weeks = mean(n_weeks),
-            sd_weeks = sd(n_weeks),
-            min_weeks = min(n_weeks),
-            max_weeks = max(n_weeks))
-
-####################################################################################
-#Now that we have a list of cameras with operation we can use, I need to identify how many detentions of each group, for each site/year/week combination
-
-#Lets create a temporary frame to work in so we don't have to re-run the independent detection loop again if needed
-wtd_dets<-wtd
-
-#First, filter our dataframe to the same months
-wtd_dets<-wtd_dets%>%
-  mutate(month = month(datetime))%>%
-  filter(month %in% 6:9)
-
-#Add the year and week columns we will need
-wtd_dets<-wtd_dets%>%
-  mutate(year = year(datetime),
-         week = week(datetime))
-
-#Ok now I think I can do this. Since each event with a yoy or lone female is indicated by just a 1 (presence), I should be able to sum occurrences for each year/site/week combination right?
-#REMEMBER - this will not account for double absences! Sites with zero young and zero adult will not be captured here. Address this next
-wtd_dets<-wtd_dets%>%
-  group_by(array, year, site, week, species)%>%
-  summarise(n_obs = n())%>%
-  pivot_wider(names_from = species, values_from = n_obs)%>%
-  rename("wtd_present" = "White-tailed deer", "wolf_present" = "Grey wolf")%>%
-  #And then take those sums, and turn them back into presence/absence again
-  #Remember just want to know for each week if a group was present!
-  mutate(across(c(wtd_present, wolf_present),
-                ~ ifelse(is.na(.x) | .x == 0, 0, 1)))
-
-
-#And now, we can merge this with the weekly operation file.
-wtd_dets<-left_join(weekly_operation, wtd_dets, by = c("array", "year", "site", "week"))
-
-#And now, lets fill in the zeros for the weeks where we had no detections
-wtd_dets<-wtd_dets%>%
-  mutate(wtd_present = ifelse(is.na(wtd_present), 0, wtd_present),
-         wolf_present = ifelse(is.na(wolf_present), 0, wolf_present))
-
-#Math check, how many weeks?
-wtd_dets%>%
-  group_by(year, site)%>%
-  summarise(n_weeks = n_distinct(week))%>%
-  ungroup()%>%
-  summarise(total_weeks = sum(n_weeks))
-
-#And last step, for each array, site, and year --> how many weeks were sampled, and how many of those weeks had a detection of a young or an adult. Again, since young and adult are coded as present or absent, we can sum them up
-wtd_dets<-wtd_dets%>%
-  group_by(array, year, site)%>%
-  summarise(n_weeks = n_distinct(week),   #how many weeks for each site
-            deer_present = sum(wtd_present),#how many of those weeks had a deer
-            wolf_present = sum(wolf_present)) #how many had a wolf
-
-
-
-#Can we visualize this nicely? Yes, but need to manipulate the frame a little bit for eas
-ggplot(wtd_dets, aes(x = array, y = deer_present / n_weeks))+
-  geom_jitter()+
-  ylab("Proportion Summer Weeks Present")+
-  xlab("Array")+
-  theme_classic()
-
-ggplot(wtd_dets, aes(x = array, y = wolf_present / n_weeks))+
-  geom_jitter()+
-  ylab("Proportion Summer Weeks Present")+
-  xlab("Array")+
-  theme_classic()
-
-
-#I would like to write this file now for future use!
-#write.csv(wtd_dets,file.path(output_directory, "weekly_proportional_binomial.csv"),
-#          row.names = FALSE)
-
-
-```
-
-
-And now seperately with the previously prepared dataframe, lets work on weekly proportional binomial for the female deer, and female with young
-```{r}
-#Reminder on our dataframe
-wtd_demographics
-
-#Second, since we don't care about absolute number of deer in events, we are going to turn things into binary present or absent. 
-#First turn those NAs into zeros
-wtd_demographics <- wtd_demographics %>%
-  mutate(across(c(female, yoy),
-                ~ ifelse(is.na(.x) | .x == 0, 0, 1)))
-
-#Next, for event ID lets identify if a young was present or if a female was present
-wtd_demographics<-wtd_demographics %>%
-  group_by(Event.ID) %>%
-  mutate(
-    # Whether any yoy = 1 within the event
-    yoy_present = as.integer(any(yoy == 1, na.rm = TRUE)),
-    
-    # Whether ONLY females were present (female = 1 somewhere, but no yoy = 1 anywhere)
-    female_only = as.integer(any(female == 1, na.rm = TRUE) & !any(yoy == 1, na.rm = TRUE))
-  ) %>%
-  ungroup()
-
-#Finally, lets reduce to one row per event, and filter out events with zeros for both categories (these would represent males and stuff)
-wtd_demographics<-wtd_demographics%>%
-  group_by(Event.ID)%>%
-  filter(row_number()==1)%>%
-  filter(!(yoy_present == 0 & female_only == 0))%>%
-  ungroup()%>%
-  dplyr::select(-c(female, yoy))
-
-#Lets get rid of species we dont need that no mo
-wtd_demographics<-wtd_demographics%>%
-  dplyr::select(-species)
-
-
-
-
-
-#First, filter our dataframe to the same months
-wtd_demographics<-wtd_demographics%>%
-  mutate(month = month(datetime))%>%
-  filter(month %in% 6:9)
-
-#Add the year and week columns we will need
-wtd_demographics<-wtd_demographics%>%
-  mutate(year = year(datetime),
-         week = week(datetime))
-
-#Ok now I think I can do this. Since each event with a yoy or lone female is indicated by just a 1 (presence), I should be able to sum occurrences for each year/site/week combination right?
-#REMEMBER - this will not account for double absences! Sites with zero young and zero adult will not be captured here. Address this next
-wtd_demographics<-wtd_demographics%>%
-  group_by(array, year, site, week)%>%
-  summarise(sum_yoy = sum(yoy_present),
-            sum_adult = sum(female_only))%>%
-  #And then take those sums, and turn them back into presence/absence again
-  #Remember just want to know for each week if a group was present!
-  mutate(across(c(sum_yoy, sum_adult),
-                ~ ifelse(is.na(.x) | .x == 0, 0, 1)))%>%
-  #rename for clarity
-  rename(yoy_present = sum_yoy,
-         adult_present = sum_adult)
-
-
-#And now, we can merge this with the weekly operation file.
-wtd_demographics<-left_join(weekly_operation, wtd_demographics, by = c("array", "year", "site", "week"))
-
-#And now, lets fill in the zeros for the weeks where neither a young or adult was detected
-wtd_demographics<-wtd_demographics%>%
-  mutate(yoy_present = ifelse(is.na(yoy_present), 0, yoy_present),
-         adult_present = ifelse(is.na(adult_present), 0, adult_present))
-
-#Math check, how many weeks?
-wtd_demographics%>%
-  group_by(year, site)%>%
-  summarise(n_weeks = n_distinct(week))%>%
-  ungroup()%>%
-  summarise(total_weeks = sum(n_weeks))
-
-#And last step, for each array, site, and year --> how many weeks were sampled, and how many of those weeks had a detection of a young or an adult. Again, since young and adult are coded as present or absent, we can sum them up
-wtd_demographics<-wtd_demographics%>%
-  group_by(array, year, site)%>%
-  summarise(n_weeks = n_distinct(week),   #how many weeks for each site
-            n_young = sum(yoy_present),   #how many of those weeks had a young
-            n_adult = sum(adult_present)) #how many of those weeks had an adult
-
-
-
-#Can we visualize this nicely? Yes, but need to manipulate the frame a little bit for eas
-wtd_demographics%>%
-  pivot_longer(cols = c(n_young, n_adult),
-               values_to = "n_present")%>%
-ggplot(aes(x = array, y = n_present / n_weeks, color = name))+
-  geom_jitter()+
-  ylab("Proportion Summer Weeks Present")+
-  xlab("Array")+
-  scale_color_discrete(
-    name = "Age Class",
-    labels = c("n_young" = "Fawns", "n_adult" = "Adults"))+
-  theme_classic()
-
-
-
-#And NOW, we should be able to merge with the main file!
-wtd_dets<-wtd_dets%>%
-  left_join(wtd_demographics, by = c("array", "site", "year", "n_weeks"))
-
-
-#write that file baby
-write.csv(wtd_dets,file.path(output_directory, "weekly_proportional_binomial.csv"),
-         row.names = FALSE)
-```
-
-
-
-
-##############################################################################
-```{r}
-#Can I do a PCA of the habitat variables?
-library(factoextra)
-library(rgl)
-#First isolate them and rename them
+#First thing to do is to extract and rename the natural habitat variables from the dataframe
+#Naming conventions are weird from the ABMI source, going to update based on common names
 
 habitat<-covs%>%
+  #Using 1000m buffer to match the weather variables 
   filter(buff_dist == 1000)%>%
+  #Rename them variables
   dplyr::select(array, site,
+                water = lc_class20,
+                shrub = lc_class50,
+                grassland = lc_class110,
+                coniferous = lc_class210,
                 broadleaf = lc_class220,
-         grassland = lc_class110,
-         coniferous = lc_class210,
-         mixed = lc_class230,
-         shrub = lc_class50)%>%
-  mutate(across(c(broadleaf, grassland, coniferous, mixed, shrub),
+                mixed = lc_class230)%>%
+  #And scale them all at once
+  mutate(across(c(water, broadleaf, grassland, coniferous, mixed, shrub),
               .fns = ~ as.numeric(scale(.x))))
 
 
-# Run PCA (center = FALSE, scale. = FALSE since you've already scaled)
+# Run PCA (center = FALSE, scale. = FALSE since theyre already scaled)
 habitat_pca <- prcomp(habitat %>%
-                        dplyr::select(broadleaf, grassland, coniferous, mixed, shrub),
+                        dplyr::select(water, broadleaf, grassland, coniferous, mixed, shrub),
                       center = FALSE, scale. = FALSE)
 
-# Inspect PCA results
+# Inspect PCA results - the cumulative proportion bascially tells you the variance explained by the cumulative addition of each principle component
 summary(habitat_pca)
-# Loadings (how variables contribute to PCs)
+# Loadings (how variables contribute to PCs), basically as we move from each component how do habitats change?
 habitat_pca$rotation
-# PCA scores for each site
+#E.g. PC1 broadleaf = 0.55, strong positive contribution, coniferous = -0.69 strong negative contribution
+#PC1 represents a gradient between broadleaf and coniferous cover --> high PC1 more broadleaf less coniferous, low PC1 more coniferous, less broadleaf
+#PC2 gradient from mixed to shrubby
+
+
+
+# PCA scores for each site - these are the values we add back into the dataframe
 head(habitat_pca$x)
 
 # Combine PCA scores back with site info (use this to select PCs later)
@@ -400,17 +90,16 @@ habitat_pca_df <- bind_cols(
   as.data.frame(habitat_pca$x)
 )
 
-# Optional: visualize first two PCs
-library(ggplot2)
+# Quick visualization of the first two PCs
 ggplot(habitat_pca_df, aes(x = PC1, y = PC2, color = array)) +
   geom_point(size = 3) +
   theme_minimal() +
   labs(title = "PCA of Habitat Variables",
-       x = "PC1", y = "PC2")
+       x = "PC1 (coniferous to broadleaf)", y = "PC2 (mixed to shrub)")
 
 
 fviz_pca_biplot(habitat_pca,
-                axes = c(1, 2),     # use first 3 PCs
+                axes = c(1, 2),     # use first 2 
                 label = "var",         # show variable loadings
                 habillage = habitat$array,  # color by array
                 addEllipses = TRUE, 
@@ -420,6 +109,7 @@ fviz_pca_biplot(habitat_pca,
 
 
 #Ok lets use PC1 and PC2 for now, lets put them into the main dataframe
+#Might need to consider PC3s later
 wtd_dets<-wtd_dets%>%
   left_join(habitat_pca_df%>%
               dplyr::select(array, site, PC1, PC2),
@@ -429,7 +119,7 @@ wtd_dets<-wtd_dets%>%
 
 ##############################################################################
 
-Alright lets now work on our covariate file. I am going to keep things very simple for the time being. Just looking at a few 
+Alright lets continue to work on our covariate file. I am going to keep things very simple for the time being. Just looking at a few 
 ```{r}
 #I think I want to experiment with a few key ones, along with an overall habitat disturbance score
 #Based off Marissas SEM results: 
@@ -439,13 +129,12 @@ Alright lets now work on our covariate file. I am going to keep things very simp
 #Lets pull those out
 covs<-covs%>%
   filter(buff_dist == 1000)%>%
-  rename(broadleaf = lc_class220)%>%
-  relocate(array, site, broadleaf)%>%
+  relocate(array, site)%>%
   #remove the habitat classifications
   select(-c(lc_class110, lc_class120, lc_class20, lc_class210, lc_class230, lc_class32, lc_class33, lc_class34, lc_class50))
 
 
-#Create a sum across columns 4 to 50
+#Create a sum across columns 4 to 50, this will represent an overall disturbance score!
 covs<-covs%>%
   mutate(disturbance_index = rowSums(across(5:50)))
 
@@ -460,18 +149,20 @@ covs<-covs%>%
   well_gas = well_gas,
   well_oil = well_oil,
   well_bitumen = well_bitumen,
+  wells = well_gas + well_oil + well_bitumen,
   inactive_well = well_aband,
   seismic = conventional_seismic,
   seismic_3D = low_impact_seismic,
   harvest = harvest_area,
   pipeline = pipeline)%>%
-  dplyr::select(array, site, disturbance_index, broadleaf, roads, well_gas, well_oil, well_bitumen, inactive_well, seismic, seismic_3D, harvest, pipeline)
+  dplyr::select(array, site, disturbance_index, roads, wells, well_gas, well_oil, well_bitumen, inactive_well, seismic, seismic_3D, harvest, pipeline)
 
+#Some very quick and dirty exploration
 hist(covs$disturbance_index)
-hist(covs$broadleaf)
 hist(covs$well_gas)
 hist(covs$well_oil)
 hist(covs$well_bitumen)
+hist(covs$wells)
 hist(covs$roads)
 hist(covs$inactive_well)
 hist(covs$seismic)
@@ -479,16 +170,13 @@ hist(covs$seismic_3D)
 hist(covs$harvest)
 hist(covs$pipeline)       
 
-#I am going to reduce this to just a few key players
+#Recognize that we still ahve all our sites!
 n_distinct(covs$site)
 
 
 
 #Lets link that into the detection file
 wtd_dets<-merge(wtd_dets, covs, by = c("site", "array"))
-
-temp<-wtd_dets
-wtd_dets<-temp
 
 
 ```
@@ -533,7 +221,6 @@ ggplot(weather_summary, aes(x = date)) +
 winter_months<-c(9, 10, 11, 12, 1, 2, 3) 
 
 
-#Ok lets pick an arbitrary winter period. Lets say october to february?
 #First just keep data in those months
 weather_10<-weather_10%>%
   filter(month(date) %in% winter_months)
@@ -637,6 +324,9 @@ hist(wtd_dets$snow_anomaly)
 hist(wtd_dets$temp_anomaly)
 
 
+#Lets write that file and move on to modeling!
+write.csv(wtd_dets, file.path(output_directory, "final_df.csv"),
+          row.names = FALSE)
 
 
 ```
