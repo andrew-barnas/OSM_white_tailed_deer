@@ -25,7 +25,7 @@ figure_directory<-reproducible::checkPath(file.path(getwd(), "2. Site Variables/
 
 #read in the files we need
 #This is from the species response variable file
-wtd_dets<-read.csv(file.path(input_directory, "weekly_proportional_binomial.csv"))
+wtd_dets<-read.csv(file.path(input_directory, "weekly_proportional_binomial_with_males.csv"))
 
 #These are from the original input folder (fix later to be better)
 camop<-read.csv(file.path(getwd(), "1. Species Response Variables/inputs/OSM_camera_deployment.csv"))
@@ -55,12 +55,13 @@ habitat<-covs%>%
   filter(buff_dist == 1000)%>%
   #Rename them variables
   dplyr::select(array, site,
-                water = lc_class20,
-                shrub = lc_class50,
                 grassland = lc_class110,
+                water = lc_class20,
                 coniferous = lc_class210,
                 broadleaf = lc_class220,
-                mixed = lc_class230)%>%
+                mixed = lc_class230,
+                shrub = lc_class50
+                )%>%
   #And scale them all at once
   mutate(across(c(water, broadleaf, grassland, coniferous, mixed, shrub),
               .fns = ~ as.numeric(scale(.x))))
@@ -130,32 +131,60 @@ Alright lets continue to work on our covariate file. I am going to keep things v
 covs<-covs%>%
   filter(buff_dist == 1000)%>%
   relocate(array, site)%>%
-  #remove the habitat classifications
-  select(-c(lc_class110, lc_class120, lc_class20, lc_class210, lc_class230, lc_class32, lc_class33, lc_class34, lc_class50))
+  #remove the natural habitat classifications
+  select(-c(lc_class110, lc_class20, lc_class210, lc_class220, lc_class230,lc_class50))%>%
+  #keeping a few of these that could be considered disturbance
+  rename(rock_and_rubble = lc_class32,
+         agriculture = lc_class120,
+         exposed = lc_class33,
+         developed = lc_class34
+         )
 
-
-#Create a sum across columns 4 to 50, this will represent an overall disturbance score!
+#Removing the reclaimed stuff since that should not be considered disturbance (likely little impact  since it looks like its mostly 0's in the dataset - BUT FOR CONSISTENCY I GUESS!)
 covs<-covs%>%
-  mutate(disturbance_index = rowSums(across(5:50)))
+  dplyr::select(-c(ris_reclaimed_certified, ris_reclaimed_permanent, ris_reclaimed_temp))
 
-#Ok now the specific ones
+#Also removing features where it is not clear if it would fit into a polygonal or linear category
+covs<-covs%>%
+  dplyr::select(-c(surrounding_veg, transfer_station))
+
+#Create a sum across all the columns of disturbance, this will represent an overall disturbance score!
+covs<-covs%>%
+  mutate(disturbance_index = rowSums(across(4:107)))
+
+#I also want to create a broad "linear" and "polygonal" sum variable. This is just a sum of the polygonal and linear sums as I read the definitions in the file.
+covs<-covs%>%
+  mutate(
+    linear_index = airp_runway + canal + conventional_seismic + interchange_ramp + low_impact_seismic + 
+      pipeline + ris_airp_runway + ris_road + ris_transmission_line + ris_windrow + rlwy_dbl_track + rlwy_mlt_track + rlwy_sgl_track + rlwy_spur + road_gravel_1l + road_gravel_2l + road_paved_1l + road_paved_2l + road_paved_3l + road_paved_4l + road_paved_5l + road_paved_div + road_paved_undiv_1l + road_paved_undiv_2l + road_unclassified + road_unimproved + road_unpaved_1l + road_paved_undiv_2l + road_winter + runway + trail + transmission_line + truck_trail + vegetated_edge_railways + vegetated_edge_roads
+    ,  
+    
+    polygonal_index = borrowpit_dry + borrowpit_wet + borrowpits + camp_industrial + campground + cfo + clearing_unknown + clearing_wellpad_unconfirmed + country_residence + crop + cultivation_abandoned + dugout + facility_other + facility_unknown + fruit_vegetables + golfcourse + greenspace + grvl_sand_pit + harvest_area + harvest_area_white_zone + lagoon + landfill + rock_and_rubble + agriculture + exposed + developed + mill + mines_oilsands + mines_pitlake + misc_oil_gas_facility + oil_gas_plant + peat +  open_pit_mine + recreation + reservoir + residence_clearing + ris_borrowpits + ris_camp_industrial + ris_clearing_unknown + ris_drainage + ris_facility_operations + ris_facility_unknown + ris_mines_oilsands + ris_oilsands_rms + ris_overburden_dump + ris_plant + ris_reclaim_ready + ris_soil_replaced + ris_soil_salvaged + ris_tailing_pond + ris_tank_farm + ris_utilities + ris_waste + rough_pasture + rural_residence + tailing_pond + tame_pasture + urban_industrial + urban_residence + well_aband + well_bitumen + well_cased + well_cleared_not_confirmed + well_cleared_not_drilled + well_gas + well_oil + well_other + well_unknown
+  )
+
+#############################################
+
+#Ok now we can work on the specific ones
 colnames(covs)
 
 covs<-covs%>%
-  #Lets put all the roads together
-  mutate(roads = road_gravel_1l + road_gravel_2l + road_paved_1l + road_paved_2l + road_paved_3l + road_paved_4l + road_paved_5l + road_paved_div + road_paved_undiv_1l + road_paved_undiv_2l + road_unclassified + road_unimproved + road_unpaved_1l + road_unpaved_2l + road_winter,
+  #Lets put all the roads together (along with their associated vegetated edges)
+  mutate(roads = road_gravel_1l + road_gravel_2l + road_paved_1l + road_paved_2l + road_paved_3l + road_paved_4l + road_paved_5l + road_paved_div + road_paved_undiv_1l + road_paved_undiv_2l + road_unclassified + road_unimproved + road_unpaved_1l + road_unpaved_2l + road_winter + vegetated_edge_roads,
          
-  #and and active well thing?
+  #different well types, along with a generic "well"
+  #Not including "well_unknown" since that states the status is unknown
   well_gas = well_gas,
   well_oil = well_oil,
   well_bitumen = well_bitumen,
-  wells = well_gas + well_oil + well_bitumen,
+  wells = well_gas + well_oil + well_bitumen + well_other,
   inactive_well = well_aband,
+  
   seismic = conventional_seismic,
   seismic_3D = low_impact_seismic,
   harvest = harvest_area,
   pipeline = pipeline)%>%
-  dplyr::select(array, site, disturbance_index, roads, wells, well_gas, well_oil, well_bitumen, inactive_well, seismic, seismic_3D, harvest, pipeline)
+  #And then just keep the ones we care about
+  dplyr::select(array, site, disturbance_index, linear_index, polygonal_index, roads, wells, well_gas, well_oil, well_bitumen, inactive_well, seismic, seismic_3D, harvest, pipeline)
 
 #Some very quick and dirty exploration
 hist(covs$disturbance_index)
@@ -324,717 +353,34 @@ hist(wtd_dets$snow_anomaly)
 hist(wtd_dets$temp_anomaly)
 
 
+
+
+```
+
+
+
+Predator detections?
+```{r}
+hist(wtd_dets$predator_detections)
+#Lets make this into a rate controlling for effort
+wtd_dets<-wtd_dets%>%
+  mutate(predator_index = predator_detections/n_weeks)
+
+hist(wtd_dets$predator_index)
+
+
+```
+
+
+Write that final dataframe
+```{r}
 #Lets write that file and move on to modeling!
 write.csv(wtd_dets, file.path(output_directory, "final_df.csv"),
           row.names = FALSE)
 
+#write.csv(wtd_dets_clean, file.path(output_directory, "final_df.csv"),
+  #        row.names = FALSE)
 
-```
 
-Lets do a little exercise here, I want to know how these different disturbance metrics are performing
-```{r}
-#How do I keep losing lat/long??
-wtd_dets<-wtd_dets%>%
-  left_join(camop%>%
-              dplyr::select(site, lat, long),
-            by = "site")
 
-
-#Scale everyone
-wtd_dets<-wtd_dets%>%
-  mutate(across(c(mean_snow, mean_snow_spatial, snow_anomaly, mean_min_temp, mean_min_temp_spatial, temp_anomaly, disturbance_index, broadleaf, lat, roads, well_gas, well_oil, well_bitumen, inactive_well, seismic, seismic_3D, harvest, pipeline),
-              .fns = ~ as.numeric(scale(.x))))  
-
-
-#Model of the PCs
-m1<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   PC1 + PC2+
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-summary(m1)
-
-
-#How does a model behave with broadleaf vs these components
-broadleaf_model<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   broadleaf+
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-summary(broadleaf_model)
-
-
-
-
-pc_model<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   PC1 + PC2+
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-summary(pc_model)
-
-model.sel(broadleaf_model, pc_model, rank = "AICc")
-
-
-#Global model of disturbance stuff
-m1<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   disturbance_index + roads + well_gas + well_oil + well_bitumen + inactive_well + seismic + seismic_3D + harvest + pipeline+ 
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-summary(m1)
-
-
-#Quick model seleciton exercise?
-disturbance_index<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   disturbance_index +
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-summary(disturbance_index)
-roads<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   roads +
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-summary(roads)
-well_gas<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   well_gas +
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-summary(well_gas)
-
-well_bitumen<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   well_bitumen +
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-summary(well_bitumen)
-
-well_oil<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   well_oil +
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-summary(well_oil)
-inactive_well<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   inactive_well + 
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-summary(inactive_well)
-seismic<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                  seismic +      (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-summary(seismic)
-seismic_3D<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   seismic_3D +
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-summary(seismic_3D)
-harvest<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   harvest +
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-summary(harvest)
-
-pipeline<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   pipeline +
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-summary(pipeline)
-
-ms<-model.sel(disturbance_index, roads, well_gas, well_oil, well_bitumen, inactive_well, harvest, pipeline, seismic, seismic_3D,
-              rank = "AICc")
-
-ms<- as.data.frame(ms) %>%
-  # Add model names as a column
-  mutate(model = rownames(ms)) %>%
-  # Keep only the columns you care about
-  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
-  # Optional: arrange by AICc
-  arrange(AICc)%>%
-  mutate(weight = round(weight, digits = 2))
-
-View(ms)
-
-#Ok well_gas has the most informative and its positive, lets build from there
-
-well_gas<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   well_gas +
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-summary(well_gas)
-
-
-#Snow and snow anomaly?
-m1<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   well_gas + PC1 + PC2 + mean_snow_spatial + snow_anomaly+
-                     well_gas*mean_snow_spatial+
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-
-summary(m1)
-
-
-m1<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   well_gas + PC1 + PC2 + mean_min_temp_spatial + temp_anomaly+
-                     well_gas*mean_min_temp_spatial+
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-
-summary(m1)
-
-#Can we plot this?
-
-
-
-
-m1<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   well_gas + PC1 + PC2 + mean_min_temp_spatial + temp_anomaly+
-                     well_gas*mean_min_temp_spatial+
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-
-summary(m1)
-
-
-
-m1<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   pipeline + PC1 + PC2 + mean_min_temp_spatial + temp_anomaly+
-                     pipeline*mean_min_temp_spatial+
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-
-
-summary(m1)
-
-
-
-##############################################
-#3D seismic has the best predictive effect...but its negative. Strange
-#Is there anything that can be done to moderate this?
-m1<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   mean_snow_spatial*well_gas+ lat + broadleaf+
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-summary(m1)
-
-
-lowQ  <- quantile(wtd_dets$well_gas, 0.10, na.rm = TRUE)
-highQ <- quantile(wtd_dets$well_gas, 0.90, na.rm = TRUE)
-
-
-lowQ  <- min(wtd_dets$pipeline)
-highQ <- max(wtd_dets$pipeline)
-
-pred_spatial <- ggpredict(
-  m1,
-  terms = c("mean_min_temp_spatial [all]",
-            "pipeline [lowQ, highQ]"),
-  type = "fe"
-)%>%
-  rename(mean_min_temp_spatial= x,
-         disturbance_quantile = group)
-
-
-ggplot(pred_spatial, aes(x = mean_min_temp_spatial, y = predicted, colour = disturbance_quantile)) +
-  geom_line(size = 1.2) +
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = disturbance_quantile),
-              alpha = 0.15, colour = NA) +
-  labs(x = "Scaled average long term mean min temp @ site", 
-       y = "Probability of deer weekly presence"
-  ) +
-  scale_colour_manual(values = c("#0072B2", "#D55E00"),
-                      labels = c("Low gas wells", "High gas wells")) +
-  scale_fill_manual(values = c("#0072B2", "#D55E00"),
-                    labels = c("Low gas wells", "High gas wells")) +
-  theme_classic(base_size = 14)
-
-
-
-```
-
-
-
-```{r}
-weather_variables<-c("mean_min_temp", "mean_min_temp_spatial", "temp_anomaly",
-                     "mean_snow", "mean_snow_spatial", "snow_anomaly")
-
-disturbance_variables<-c("disturbance_index", "roads", "active_well", "inactive_well", "seismic", "seismic_3D",
-                         "harvest", "pipeline")
-
-
-interaction_combos <- expand.grid(weather = weather_variables,
-                                  disturbance = disturbance_variables,
-                                  stringsAsFactors = FALSE)
-
-# Initialize an empty list to store results
-results_list <- list()
-
-# Loop through each combination
-for (i in seq_len(nrow(interaction_combos))) {
-  w <- interaction_combos$weather[i]
-  d <- interaction_combos$disturbance[i]
-  
-  # Build formula dynamically
-  formula_str <- paste0("cbind(deer_present, (n_weeks - deer_present)) ~ ",
-                        w, " * ", d, " + (1 | array)")
-  formula_obj <- as.formula(formula_str)
-  
-  # Try fitting the model, skip if it fails
-  model <- try(glmmTMB::glmmTMB(formula_obj, family = binomial, data = wtd_dets), silent = TRUE)
-  if (inherits(model, "try-error")) next
-  
-  # Tidy the model output
-  tidy_mod <- broom.mixed::tidy(model, effects = "fixed")
-  
-  # Extract interaction term
-  interaction_term <- paste0(w, ":", d)
-  interaction_row <- tidy_mod %>% filter(term == interaction_term)
-  
-  if (nrow(interaction_row) > 0) {
-    results_list[[length(results_list) + 1]] <- data.frame(
-      weather = w,
-      disturbance = d,
-      estimate = interaction_row$estimate,
-      std_error = interaction_row$std.error,
-      z_value = interaction_row$statistic,
-      p_value = interaction_row$p.value
-    )
-  }
-}
-
-# Combine results
-interaction_results <- bind_rows(results_list)
-
-# Arrange for easy viewing
-interaction_results <- interaction_results %>%
-  arrange(p_value)
-
-interaction_results
-
-
-#Testing models
-A<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   
-                   	
-mean_min_temp*active_well + broadleaf
-                   
-                   +(1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-summary(A)
-
-
-
-A<-wtd_dets%>%
-  group_by(site)%>%
-  summarise(n())
-
-```
-
-
-Lets do some quick model prep and modeling before lunch break
-```{r}
-
-
-
-#How do I keep losing lat/long??
-wtd_dets<-wtd_dets%>%
-  left_join(camop%>%
-              dplyr::select(site, lat, long),
-            by = "site")
-
-#Lets scale the remaining predictors
-wtd_dets<-wtd_dets%>%
-  mutate(across(c(mean_snow, mean_snow_spatial, snow_anomaly, mean_min_temp, mean_min_temp_spatial, temp_anomaly, disturbance, broadleaf, lat),
-              .fns = ~ as.numeric(scale(.x))))  
-         
-
-#I forgot to scale things
-
-#I am sure things are correlated af but I dont care right now
-# Select your variables
-vars <- wtd_dets %>%
-  dplyr::select(mean_snow, mean_snow_spatial, snow_anomaly, mean_min_temp, mean_min_temp_spatial, temp_anomaly, disturbance, broadleaf)
-
-# Compute correlation matrix (use complete.obs to ignore NAs)
-cor_matrix <- cor(vars, use = "complete.obs")
-
-# Print the correlation matrix
-print(round(cor_matrix, 2))
-
-# Visualize it
-corrplot(cor_matrix, method = "color", type = "upper", 
-         tl.col = "black", tl.srt = 45, addCoef.col = "black")
-######################################################################################
-#Who cares lets build - models of varying winter components
-mean_snow<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   disturbance +scale(lat) + broadleaf +
-                    mean_snow + 
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-summary(mean_snow)
-
-
-mean_snow_spatial<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   disturbance +scale(lat) + broadleaf +
-                    mean_snow_spatial + 
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-summary(mean_snow_spatial)
-
-
-snow_anomaly<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   disturbance +scale(lat) + broadleaf +
-                    snow_anomaly + 
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-summary(snow_anomaly)
-
-
-
-mean_min_temp<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   disturbance +scale(lat) + broadleaf +
-                    mean_min_temp + 
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-summary(mean_min_temp)
-
-
-mean_min_temp_spatial<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   disturbance +scale(lat) + broadleaf +
-                    mean_min_temp_spatial + 
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-summary(mean_min_temp_spatial)
-
-
-temp_anomaly<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   disturbance +scale(lat) + broadleaf +
-                    temp_anomaly + 
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-summary(temp_anomaly)
-
-
-mean_min_temp_spatial_int<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
-                   disturbance +scale(lat) + broadleaf +
-                    mean_min_temp_spatial*disturbance + 
-                   (1|array),
-                 family = "binomial",
-                 data = wtd_dets)
-summary(mean_min_temp_spatial_int)
-
-
-library(MuMIn)
-ms<-model.sel(mean_snow, mean_snow_spatial, snow_anomaly, mean_min_temp, mean_min_temp_spatial, temp_anomaly,
-          rank = "AICc")
-
-ms<- as.data.frame(ms) %>%
-  # Add model names as a column
-  mutate(model = rownames(ms)) %>%
-  # Keep only the columns you care about
-  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
-  # Optional: arrange by AICc
-  arrange(AICc)%>%
-  mutate(weight = round(weight, digits = 2))
-
-View(ms)
-
-
-###########################
-lowQ  <- quantile(wtd_dets$disturbance, 0.10, na.rm = TRUE)
-highQ <- quantile(wtd_dets$disturbance, 0.90, na.rm = TRUE)
-
-pred_spatial <- ggpredict(
-  mean_min_temp_spatial,
-  terms = c("mean_min_temp_spatial [all]",
-            paste0("disturbance [", round(lowQ, 2), ",", round(highQ, 2), "]")),
-  type = "fe"
-)%>%
-  rename(mean_min_temp = x,
-         disturbance_quantile = group)
-
-
-ggplot(pred_spatial, aes(x = mean_min_temp, y = predicted, colour = disturbance_quantile)) +
-  geom_line(size = 1.2) +
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = disturbance_quantile),
-              alpha = 0.15, colour = NA) +
-  labs(
-    x = "Scaled Mean Minimum Winter Temperature (Spatial)",
-    y = "Predicted Probability of Deer Presence",
-    colour = "Disturbance level",
-    fill = "Disturbance level",
-    title = "Interaction between Spatial Mean Winter Temperature and Disturbance"
-  ) +
-  scale_colour_manual(values = c("#0072B2", "#D55E00"),
-                      labels = c("Low disturbance", "High disturbance")) +
-  scale_fill_manual(values = c("#0072B2", "#D55E00"),
-                    labels = c("Low disturbance", "High disturbance")) +
-  theme_classic(base_size = 14)
-
-```
-
-
-
-
-Preparing the data for preliminary models
-```{r}
-#Lets scale the variables and then explore correlations
-temp<-temp%>%
-  mutate(across(
-    .cols = c(broadleaf, roads, wells, conventional_seismic, pipeline, mean_min_temp, mean_swe, mean_precip, snow_dif, temp_dif, precip_dif, snow_10_mean),
-    .fns = ~ as.numeric(scale(.x)),
-    .names = "scale_{.col}"
-  ))
-
-#Check for correlations
-# Select your variables
-vars <- temp %>%
-  dplyr::select(scale_broadleaf, scale_roads, scale_wells, scale_conventional_seismic, scale_pipeline, scale_mean_min_temp, scale_mean_swe, scale_mean_precip, snow_dif, temp_dif, precip_dif, snow_10_mean)
-
-# Compute correlation matrix (use complete.obs to ignore NAs)
-cor_matrix <- cor(vars, use = "complete.obs")
-
-# Print the correlation matrix
-print(round(cor_matrix, 2))
-
-# Visualize it
-corrplot(cor_matrix, method = "color", type = "upper", 
-         tl.col = "black", tl.srt = 45, addCoef.col = "black")
-
-#Alright precipitation is a bad guy. lets remove it
-temp<-temp%>%
-  dplyr::select(-c(scale_mean_precip, precip_df)
-
-
-```
-
-
-Its all come to down to this. Lets run some models baby
-```{r}
-
-#Variance estimates for year were super low, so not including those as a random effect
-
-#global model for adults and young to get started!
-m1<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf +
-                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_mean_min_temp + scale_mean_swe +
-                   (1|array) + (1|year),
-                 family = "binomial",
-                 data = temp)
-summary(m1)
-
-
-m1<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks-n_young)) ~ scale_broadleaf +
-                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_mean_min_temp + scale_mean_swe +
-                   (1|array),
-                 family = "binomial",
-                 data = temp)
-summary(m1)
-
-####################
-#interaction terms?
-m1<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf +
-                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_mean_min_temp + scale_mean_swe + scale_roads*scale_mean_min_temp +
-                   (1|array),
-                 family = "binomial",
-                 data = temp)
-summary(m1)
-
-
-m1<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks-n_young)) ~ scale_broadleaf +
-                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_mean_min_temp + scale_mean_swe + scale_pipeline*scale_mean_min_temp+
-                   (1|array),
-                 family = "binomial",
-                 data = temp)
-summary(m1)
-
-###################################
-#What about a nice straightforward interaction?
-m1<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks-n_young)) ~ scale_broadleaf +
-                   scale_wells*scale_mean_swe+
-                   (1|array),
-                 family = "binomial",
-                 data = temp)
-summary(m1)
-
-
-#What if we account for that north south gradient?
-#Adding the coordinates back in
-temp<-temp%>%
-  left_join(camop%>%
-  dplyr::select(site, lat, long),
-  by = c("site"))
-
-#Ok yea latitude is important for suresies
-m1<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf + lat +
-                   (1|array),
-                 family = "binomial",
-                 data = temp)
-
-summary(m1)
-
-
-m1<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf + lat + scale_mean_swe +
-                       scale_pipeline+
-                   (1|array),
-                 family = "binomial",
-                 data = temp)
-
-summary(m1)
-
-
-#Models with the difference stuff
-m1<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf + scale_snow_10_mean +
-                       scale_pipeline+ scale_snow_dif+
-                   (1|array),
-                 family = "binomial",
-                 data = temp)
-
-summary(m1)
-
-
-#Models with the difference stuff
-m1<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks-n_young)) ~ scale_broadleaf + scale_snow_10_mean + scale_snow_dif +
-                       scale_pipeline+
-                   (1|array),
-                 family = "binomial",
-                 data = temp)
-
-summary(m1)
-
-
-m1<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf + scale_snow_10_mean +
-                       scale_roads+ scale_snow_dif+
-                   (1|array),
-                 family = "binomial",
-                 data = temp)
-
-summary(m1)
-
-
-#Models with the difference stuff
-m1<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks-n_young)) ~ scale_broadleaf + scale_snow_10_mean + scale_snow_dif +
-                       scale_pipeline+
-                   (1|array),
-                 family = "binomial",
-                 data = temp)
-
-summary(m1)
-
-
-#Global
-m1<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf +
-                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_snow_10_mean + scale_snow_dif +
-                   (1|array) + (1|year),
-                 family = "binomial",
-                 data = temp)
-summary(m1)
-
-#Global
-m1<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks-n_young)) ~ scale_broadleaf +
-                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_snow_10_mean + scale_snow_dif +
-                   (1|array) + (1|year),
-                 family = "binomial",
-                 data = temp)
-summary(m1)
-
-
-
-#Global with interaction
-m1_adult<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks-n_adult)) ~ scale_broadleaf +
-                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_snow_10_mean + scale_snow_dif + scale_snow_10_mean*scale_roads + scale_snow_dif*scale_roads+
-                   (1|array),
-                 family = "binomial",
-                 data = temp)
-summary(m1)
-
-#Global with interaction
-m1_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks-n_young)) ~ scale_broadleaf +
-                   scale_roads + scale_wells + scale_conventional_seismic + scale_pipeline + scale_snow_10_mean + scale_snow_dif +scale_snow_10_mean*scale_roads + scale_snow_dif*scale_roads+
-                   (1|array),
-                 family = "binomial",
-                 data = temp)
-summary(m1)
-
-# -----------------------------
-# 1. Predicted probabilities for adult-only model
-# -----------------------------
-roads_q <- quantile(temp$scale_roads, probs = c(0.25, 0.75), na.rm = TRUE)
-low_roads <- roads_q[1]
-high_roads <- roads_q[2]
-
-
-adult_pred_low <- ggpredict(m1_adult, terms = c("scale_snow_10_mean [all]", paste0("scale_roads [", round(low_roads, 2), "]")))
-adult_pred_low$road_level <- "Low Roads"
-
-adult_pred_high <- ggpredict(m1_adult, terms = c("scale_snow_10_mean [all]", paste0("scale_roads [", round(high_roads, 2), "]")))
-adult_pred_high$road_level <- "High Roads"
-
-adult_pred <- bind_rows(adult_pred_low, adult_pred_high)
-adult_pred$group <- "Adult Female"
-
-# -----------------------------
-# 3. Predicted probabilities for adult+young model
-# -----------------------------
-young_pred_low <- ggpredict(m1_young, terms = c("scale_snow_10_mean [all]", paste0("scale_roads [", round(low_roads, 2), "]")))
-young_pred_low$road_level <- "Low Roads"
-
-young_pred_high <- ggpredict(m1_young, terms = c("scale_snow_10_mean [all]", paste0("scale_roads [", round(high_roads, 2), "]")))
-young_pred_high$road_level <- "High Roads"
-
-young_pred <- bind_rows(young_pred_low, young_pred_high)
-young_pred$group <- "Adult + Young"
-
-pred_df <- bind_rows(adult_pred, young_pred)
-
-ggplot(pred_df, aes(x = x, y = predicted, color = road_level)) +
-  geom_line(size = 1) +
-  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = road_level), alpha = 0.2, color = NA) +
-  facet_wrap(~group) +
-  labs(
-    x = "Long-term Snow Load (10-year mean, scaled)",
-    y = "Predicted Probability of Detection",
-    color = "Road Density",
-    fill = "Road Density"
-  ) +
-  scale_color_manual(values = c("blue", "red")) +
-  scale_fill_manual(values = c("blue", "red")) +
-  theme_minimal(base_size = 14)
 ```

@@ -1,0 +1,242 @@
+What are we doing here....the purpose of this is to do the disturbance variable seleciton but better
+
+```{r}
+#Clear everything out and start fresh
+rm(list=ls())
+library(reproducible) #setting up directories for data management
+library(readr)        #Needed to read and merge all the csv's in the camera folder
+library(dplyr)        #data wranglin'
+library(lubridate)    #datetime manipulation
+library(tidyr)        #more data manipulation
+library(stringr)      #detecting character strings
+library(ggplot2)      #data visualization
+library(purrr)        #feline-friendly loops 
+library(corrplot)     #correlation tests
+library(MuMIn)
+library(ggeffects)
+library(ggpubr)
+
+
+#This just sets up files for inputs (already created, must contain your files), and outputs
+input_directory<-reproducible::checkPath(file.path(getwd(), "2. Site Variables/outputs"), create = TRUE)
+output_directory<-reproducible::checkPath(file.path(getwd(), "3. Disturbance Variable Selection/outputs"), create = TRUE)
+figure_directory<-reproducible::checkPath(file.path(getwd(), "3. Disturbance Variable Selection/figures"), create = TRUE)
+
+
+#read in the files we need
+#This is from the species response variable file
+wtd_dets<-read.csv(file.path(input_directory, "final_df.csv"))
+
+
+
+```
+
+Initial visual exploration of variables.
+
+```{r}
+colnames(wtd_dets)
+
+#isolate the disturbance variables, I just want a cleaner dataframe
+df<-wtd_dets%>%
+  dplyr::select(array, site, disturbance_index, linear_index, polygonal_index, roads, wells, well_gas, well_oil, well_bitumen, inactive_well, seismic, seismic_3D, harvest, pipeline)
+
+
+#Lets make some plots! So this is the baseline plot that I want for each. But I am too lazy to repeat this for every measure
+ggplot(df, aes(x = disturbance_index))+
+  geom_histogram(fill = "grey", color = "black")+
+  theme_classic()+
+  ylab("Count")+
+  xlab("Proportion Disturbance Index")+
+  theme(axis.title = element_text(size = 15))
+
+
+# Get all disturbance variable names
+vars <- setdiff(names(df), c("array", "site"))
+
+# Function to convert var names: underscores → spaces, title case
+pretty_name <- function(x) {
+  x %>%
+    gsub("_", " ", .) %>%
+    tools::toTitleCase()
+}
+
+# Create an empty list to store plots
+plot_list <- list()
+
+# Loop through variables
+for (v in vars) {
+  
+  # Build the x-axis label
+  x_lab <- paste("Proportion", pretty_name(v))
+  
+  # Build plot
+  p <- ggplot(df, aes(x = .data[[v]])) +
+    geom_histogram(fill = "grey", color = "black") +
+    theme_classic() +
+    ylab("Count") +
+    xlab(x_lab) +
+    theme(axis.title = element_text(size = 15))
+  
+  # Save plot into list
+  plot_list[[v]] <- p
+}
+
+#And then plot them all
+ggpubr::ggarrange(
+  plotlist = plot_list[1:13],
+  ncol = 4,
+  nrow = 4,
+  labels = LETTERS[1:13],    # Panel labels A, B, C, ...
+  label.x = 0.02,            # Optional: adjust label position
+  label.y = 0.98,
+  font.label = list(size = 14, face = "bold")
+)
+
+
+#Based on that plot, I think I want to remove the individual well types and instead just go with wells. There is simply not enough variation in the wells.
+wtd_dets<-wtd_dets%>%
+  dplyr::select(-c(well_gas, well_bitumen, well_oil))
+
+#Lets look a bit closer at each one. Basically my though
+
+quantile(wtd_dets$seismic_3D)
+hist(wtd_dets$seismic_3D)
+
+quantile(wtd_dets$wells)
+hist(wtd_dets$seismic_3D)
+
+```
+
+Lets build our single variable models seperately for each group
+```{r}
+#First things first, lets scale all variables
+#Doing this into a temporary dataframe so that I don't mess anything up later
+df<-wtd_dets%>%
+  mutate(across(c(disturbance_index, linear_index, polygonal_index, roads, wells, inactive_well, seismic, seismic_3D, harvest, pipeline), .fns = ~ as.numeric(scale(.x))))
+
+#Ok so quick math, 10 disturbance variables, 4 wtd demographic groups --> 40 models.
+#It will probably take me the same amount of time to code all these models individually as it would to code an elegant loop. 
+#But loops are more fun.
+
+#Here are the four demographic group response variables 
+#cbind(deer_present, (n_weeks - deer_present))
+#cbind(n_male, (n_weeks - n_male))
+#cbind(n_female, (n_weeks - n_female))
+#cbind(n_young, (n_weeks - n_young))
+
+#Here are the individual models I want
+#disturbance_index, linear_index, polygonal_index, roads, wells, inactive_well, seismic, seismic_3D, harvest, pipeline
+
+
+#Here is the base model I want
+disturbance_index_deer<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
+                   disturbance_index+
+                   (1|array),
+                 family = "binomial",
+                 data = df)
+summary(disturbance_index_deer)
+
+
+response_variables<-data.frame(response = c("cbind(deer_present, (n_weeks - deer_present)) ~",
+                      "cbind(n_male, (n_weeks - n_male)) ~",
+                      "cbind(n_female, (n_weeks - n_female)) ~",
+                      "cbind(n_young, (n_weeks - n_young)) ~"),
+                      name = c("all_deer", "male", "female", "young"))
+
+disturbance_vars <- c(
+  "disturbance_index",
+  "linear_index",
+  "polygonal_index",
+  " "
+ # "roads",
+#  "wells",
+#  "inactive_well",
+#  "seismic",
+#  "seismic_3D",
+#  "harvest",
+#  "pipeline"
+)
+
+#This is a list of all models
+model_list<-list()
+#This is a subset of the models that I will run model selection on
+model_selection_list<-list()
+
+
+for(j in 1:nrow(response_variables)){
+    
+  
+  response <- as.character(response_variables[j, 1])
+name     <- as.character(response_variables[j, 2])
+  
+  
+for(i in disturbance_vars){
+  
+  model_name<- paste(name, i, sep = "_")
+  
+  formula<- as.formula(paste(response, i , "+ (1|array)", sep = ""))
+  #formula<- as.formula(paste("cbind(deer_present, (n_weeks - deer_present)) ~", i , "+ (1|array)", sep = ""))
+  
+  fit<-glmmTMB::glmmTMB(
+                formula = formula,
+                 family = "binomial",
+                 data = df)
+  
+ # save it using the CHARACTER model_name
+    model_list[[model_name]] <- fit
+    model_selection_list[[model_name]]<-fit
+  
+}
+
+#And now down here we run model selection
+model_selection_disturbance<-as.data.frame(MuMIn::model.sel(model_selection_list, rank = "AICc"))
+
+model_selection_disturbance<-model_selection_disturbance%>%
+  # Add model names as a column
+  mutate(model = rownames(model_selection_disturbance)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+
+rownames(model_selection_disturbance)<-NULL
+
+#Save that dataframe to a distinct thing
+assign(
+  paste(name, "model_selection", sep = "_"),
+  model_selection_disturbance
+)
+
+#And clear the temporary model selection list
+model_selection_list<-list()
+
+}
+
+```
+
+
+
+Alright so I think that worked. Lets inspect our top models (PLEASSSE)
+```{r}
+#Top models for each are:
+summary(model_list$all_deer_seismic_3D) #negative effect...
+summary(model_list$male_roads)          #POSITIVE!
+summary(model_list$female_seismic_3D)   #negative...
+summary(model_list$young_seismic_3D)    #negative...
+#This one is also competitive
+summary(model_list$young_inactive_well)
+
+
+#What do the overall disturbance thigns look like? -> they are all positive!
+summary(model_list$all_deer_disturbance_index)
+summary(model_list$male_disturbance_index)
+summary(model_list$female_disturbance_index)
+summary(model_list$young_disturbance_index)
+
+
+
+
+```
+
+

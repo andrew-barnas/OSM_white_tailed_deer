@@ -34,17 +34,20 @@ wtd_dets<-read.csv(file.path(input_directory, "final_df.csv"))
 Lets prepare the data for modeling.
 ```{r}
 #First deal with wolves, need to morph this into a response variable that makes sense
-wtd_dets<-wtd_dets%>%
-  mutate(wolf_index = wolf_present/n_weeks)
+
+#wtd_dets<-wtd_dets%>%
+#  mutate(wolf_index = wolf_present/n_weeks)
 
 #PC variables are already scaled, but lets scale the remaining variables
 wtd_dets<-wtd_dets%>%
-  mutate(across(c(disturbance_index, roads, wells, well_gas, well_oil, well_bitumen, inactive_well, seismic, seismic_3D, harvest, pipeline, mean_snow, mean_min_temp, mean_snow_spatial, mean_min_temp_spatial, snow_anomaly, temp_anomaly, wolf_index), .fns = ~ as.numeric(scale(.x))))
+  mutate(across(c(disturbance_index, polygonal_index, linear_index, roads, wells,
+                  well_gas, 
+                  well_oil, well_bitumen, inactive_well, seismic, seismic_3D, harvest, pipeline, mean_snow, mean_min_temp, mean_snow_spatial, mean_min_temp_spatial, snow_anomaly, temp_anomaly, predator_index), .fns = ~ as.numeric(scale(.x))))
 
          
 #Lets do a quick check of correlations
 vars <- wtd_dets %>%
-  dplyr::select(disturbance_index, roads, wells, well_gas, well_oil, well_bitumen, inactive_well, seismic, seismic_3D, harvest, pipeline, mean_snow, mean_min_temp, mean_snow_spatial, mean_min_temp_spatial, snow_anomaly, temp_anomaly, wolf_index)
+  dplyr::select(disturbance_index, roads, wells, well_gas, well_oil, well_bitumen, inactive_well, seismic, seismic_3D, harvest, pipeline, mean_snow, mean_min_temp, mean_snow_spatial, mean_min_temp_spatial, snow_anomaly, temp_anomaly, predator_index)
 
 # Compute correlation matrix (use complete.obs to ignore NAs)
 cor_matrix <- cor(vars, use = "complete.obs")
@@ -70,6 +73,13 @@ cor_df <- as.data.frame(cor_matrix) %>%
   arrange(desc(abs(correlation)))
 
 ```
+
+Switch gas well to a categorical
+```{r}
+
+```
+
+
 
 #################################################################################################
 
@@ -174,6 +184,109 @@ rownames(model_selection_disturbance)<-NULL
 
 #Alright well a bit unsurprising but the disturbance index came out as most informative...
 ```
+
+adult males
+```{r}
+
+#Lets build a single variable model for each of the oil and gas features
+disturbance_index<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   disturbance_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(disturbance_index)
+
+
+#Consider going through the roads, this doesn't seem right
+roads<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   roads+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(roads)
+
+#Similar with all wells
+wells<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   wells+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(wells)
+
+well_gas<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   well_gas+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(well_gas)
+
+well_oil<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   well_oil+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(well_oil)
+
+well_bitumen<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   well_bitumen+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(well_bitumen)
+
+inactive_well<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   inactive_well+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(inactive_well)
+
+seismic<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   seismic+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(seismic)
+
+seismic_3D<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   seismic_3D+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(seismic_3D)
+
+
+pipeline<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   pipeline+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(pipeline)
+
+
+#Model selection and cleanup into a nice dataframe!
+model.sel(disturbance_index, roads, wells, well_gas, well_oil, well_bitumen, inactive_well, pipeline, seismic, seismic_3D,
+              rank = "AICc")
+
+model_selection_disturbance<- as.data.frame(model.sel(disturbance_index, roads, wells, well_gas, well_oil, well_bitumen, inactive_well, pipeline, seismic, seismic_3D,
+              rank = "AICc"))
+
+model_selection_disturbance_male<-model_selection_disturbance%>%
+  # Add model names as a column
+  mutate(model = rownames(model_selection_disturbance)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+
+rownames(model_selection_disturbance_male)<-NULL
+
+
+
+#Alright well a bit unsurprising but the disturbance index came out as most informative...
+```
+
 
 adult females
 ```{r}
@@ -392,6 +505,19 @@ m1_adult<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
                  data = wtd_dets)
 summary(m1_adult)
 
+#Female full interaction
+m1_male<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   disturbance_index+
+                   PC1 + PC2 + #Habitat covariates
+                   wolf_index + #Wolf index
+                   mean_snow_spatial*disturbance_index+
+                   snow_anomaly*disturbance_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(m1_male)
+
+
 
 #Female full interaction
 m1_female<-glmmTMB::glmmTMB(cbind(n_adult, (n_weeks - n_adult)) ~
@@ -431,6 +557,334 @@ m1_young_gas<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
                  data = wtd_dets)
 summary(m1_young_gas)
 
+
+```
+
+
+With predator index
+```{r}
+
+#Adult full interaction
+m1_adult<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
+                   disturbance_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Wolf index
+                   mean_snow_spatial*disturbance_index+
+                   snow_anomaly*disturbance_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(m1_adult)
+
+#Female full interaction
+m1_male<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   disturbance_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Wolf index
+                   mean_snow_spatial*disturbance_index+
+                   snow_anomaly*disturbance_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(m1_male)
+
+
+
+#Female full interaction
+m1_female<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   disturbance_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Wolf index
+                   mean_snow_spatial*disturbance_index+
+                   snow_anomaly*disturbance_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(m1_female)
+
+
+#Young full interaction
+m1_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   disturbance_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Wolf index
+                   mean_snow_spatial*disturbance_index+
+                   snow_anomaly*disturbance_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(m1_young)
+
+
+#Young full interaction
+m1_young_gas<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   well_gas+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Wolf index
+                   mean_snow_spatial*well_gas+
+                   snow_anomaly*well_gas+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(m1_young_gas)
+
+
+```
+
+
+
+With predator index + updated disturbance
+```{r}
+
+
+summary(model_list$all_deer_seismic_3D) #negative effect...
+summary(model_list$male_roads)          #POSITIVE!
+summary(model_list$female_seismic_3D)   #negative...
+summary(model_list$young_seismic_3D)    #negative...
+
+#Adult full interaction
+m1_all<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   disturbance_index + #Wolf index
+                   mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(m1_all)
+
+#Male full interaction
+m1_male<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Wolf index
+                   mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(m1_male)
+
+
+
+#Female full interaction
+m1_female<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Wolf index
+                   mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(m1_female)
+
+
+#Young full interaction
+m1_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   disturbance_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Wolf index
+                   mean_snow_spatial*disturbance_index+
+                   snow_anomaly*disturbance_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(m1_young)
+
+
+#Young full interaction
+m1_young_inactive<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   inactive_well+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Wolf index
+                   mean_snow_spatial*inactive_well+
+                   snow_anomaly*inactive_well+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(m1_young_inactive)
+
+
+```
+
+I want to see model predictions for the female and young
+```{r}
+
+#Quantiles for 3d seismic lines
+lowQ  <- quantile(wtd_dets$inactive_well, 0.10, na.rm = TRUE)
+highQ <- quantile(wtd_dets$inactive_well, 0.90, na.rm = TRUE)
+hist(wtd_dets$seismic_3D)
+
+pred_young<- ggpredict(
+  m1_young_inactive,
+  terms = c("snow_anomaly [all]",
+            paste0("inactive_well [", round(lowQ, 2), ",", round(highQ, 2), "]")),
+  type = "fe"
+)%>%
+  rename(snow_anomaly= x,
+         disturbance_quantile = group)
+
+
+ggplot(pred_young, aes(x = snow_anomaly, y = predicted, colour = disturbance_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = disturbance_quantile),
+              alpha = 0.15, colour = NA) +
+  labs(
+    x = "Scaled Mean Long term snow load",
+    y = "Predicted Probability of Deer Presence",
+    colour = "Disturbance Index level",
+    fill = "Disturbance level",
+    title = "All Deer"
+  ) +
+  scale_colour_manual(values = c("#0072B2", "#D55E00"),
+                      labels = c("Low disturbance", "High disturbance")) +
+ scale_fill_manual(values = c("#0072B2", "#D55E00"), guide = "none")+
+  #                  labels = c("Low disturbance", "High disturbance")) +
+  theme_classic(base_size = 14)
+
+```
+
+Model predictions for our models for each group
+```{r}
+#Adults
+summary(m1_young)
+
+#Quantiles for disturbance
+lowQ  <- quantile(wtd_dets$disturbance_index, 0.10, na.rm = TRUE)
+highQ <- quantile(wtd_dets$disturbance_index, 0.90, na.rm = TRUE)
+
+pred_female<- ggpredict(
+  m1_female,
+  terms = c("mean_snow_spatial [all]",
+            paste0("disturbance_index [", round(lowQ, 2), ",", round(highQ, 2), "]")),
+  type = "fe"
+)%>%
+  rename(mean_snow_spatial = x,
+         disturbance_quantile = group)
+
+
+ggplot(pred_adult, aes(x = mean_snow_spatial, y = predicted, colour = disturbance_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = disturbance_quantile),
+              alpha = 0.15, colour = NA) +
+  labs(
+    x = "Scaled Mean Long term snow load",
+    y = "Predicted Probability of Deer Presence",
+    colour = "Disturbance Index level",
+    fill = "Disturbance level",
+    title = "All Deer"
+  ) +
+  scale_colour_manual(values = c("#0072B2", "#D55E00"),
+                      labels = c("Low disturbance", "High disturbance")) +
+ scale_fill_manual(values = c("#0072B2", "#D55E00"), guide = "none")+
+  #                  labels = c("Low disturbance", "High disturbance")) +
+  theme_classic(base_size = 14)
+
+
+##############################################################
+lowQ  <- quantile(wtd_dets$disturbance_index, 0.10, na.rm = TRUE)
+highQ <- quantile(wtd_dets$disturbance_index, 0.90, na.rm = TRUE)
+
+pred_female<- ggpredict(
+  m1_female,
+  terms = c("mean_snow_spatial [all]",
+            paste0("disturbance_index [", round(lowQ, 2), ",", round(highQ, 2), "]")),
+  type = "fe"
+)%>%
+  rename(mean_snow_spatial = x,
+         disturbance_quantile = group)
+
+
+ggplot(pred_female, aes(x = mean_snow_spatial, y = predicted, colour = disturbance_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = disturbance_quantile),
+              alpha = 0.15, colour = NA) +
+  labs(
+    x = "Scaled Mean Long term snow load",
+    y = "Predicted Probability of Deer Presence",
+    colour = "Disturbance Index level",
+    fill = "Disturbance level",
+    title = "Lone Adult Females"
+  ) +
+  scale_colour_manual(values = c("#0072B2", "#D55E00"),
+                      labels = c("Low disturbance", "High disturbance")) +
+ scale_fill_manual(values = c("#0072B2", "#D55E00"), guide = "none")+
+  #                  labels = c("Low disturbance", "High disturbance")) +
+  theme_classic(base_size = 14)
+
+#################################################
+##############################################################
+lowQ  <- quantile(wtd_dets$disturbance_index, 0.10, na.rm = TRUE)
+highQ <- quantile(wtd_dets$disturbance_index, 0.90, na.rm = TRUE)
+
+pred_young<- ggpredict(
+  m1_young,
+  terms = c("mean_snow_spatial [all]",
+            paste0("disturbance_index [", round(lowQ, 2), ",", round(highQ, 2), "]")),
+  type = "fe"
+)%>%
+  rename(mean_snow_spatial = x,
+         disturbance_quantile = group)
+
+
+ggplot(pred_young, aes(x = mean_snow_spatial, y = predicted, colour = disturbance_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = disturbance_quantile),
+              alpha = 0.15, colour = NA) +
+  labs(
+    x = "Scaled Mean Long term snow load",
+    y = "Predicted Probability of Deer Presence",
+    colour = "Disturbance Index level",
+    fill = "Disturbance level",
+    title = "Lone Adult Females"
+  ) +
+  scale_colour_manual(values = c("#0072B2", "#D55E00"),
+                      labels = c("Low disturbance", "High disturbance")) +
+ scale_fill_manual(values = c("#0072B2", "#D55E00"), guide = "none")+
+  #                  labels = c("Low disturbance", "High disturbance")) +
+  theme_classic(base_size = 14)
+
+#################################################
+#Quantiles dont work here
+lowQ  <- quantile(wtd_dets$well_gas, 0.10, na.rm = TRUE)
+highQ <- quantile(wtd_dets$well_gas, 0.90, na.rm = TRUE)
+
+#not enough variation in well_gas
+#Need to remove outliers
+hist(wtd_dets$well_gas)
+
+#But for now lets use min and max
+lowQ<-min(wtd_dets$well_gas)
+highQ<-max(wtd_dets$well_gas)
+
+pred_young<- ggpredict(
+  m1_young_gas,
+  terms = c("snow_anomaly [all]",
+            paste0("well_gas [", round(lowQ, 2), ",", round(highQ, 2), "]")),
+  type = "fe"
+)%>%
+  rename(snow_anomaly = x,
+         well_gas = group)
+
+
+ggplot(pred_young, aes(x = snow_anomaly, y = predicted, colour = well_gas)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = well_gas),
+              alpha = 0.15, colour = NA) +
+  labs(
+    x = "Scaled Mean Snow Anomaly",
+    y = "Predicted Probability of Deer Presence",
+    colour = "Gas Wells",
+    fill = "Gas Wells",
+    title = "Female with Young"
+  ) +
+  scale_colour_manual(values = c("#0072B2", "#D55E00"),
+                      labels = c("Low", "High")) +
+ scale_fill_manual(values = c("#0072B2", "#D55E00"), guide = "none")+
+  #                  labels = c("Low disturbance", "High disturbance")) +
+  theme_classic(base_size = 14)
 
 ```
 
