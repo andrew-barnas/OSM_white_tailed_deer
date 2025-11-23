@@ -369,6 +369,12 @@ wtd_dets<-wtd_dets%>%
 hist(wtd_dets$predator_index)
 
 
+
+#Lazy but add the site coordinates into the final file
+wtd_dets<-wtd_dets%>%
+  left_join(camop%>%dplyr::select(site, lat, long), by = "site")%>%
+  relocate(year, array, site, lat, long)
+
 ```
 
 
@@ -380,7 +386,6 @@ write.csv(wtd_dets, file.path(output_directory, "final_df.csv"),
 
 #write.csv(wtd_dets_clean, file.path(output_directory, "final_df.csv"),
   #        row.names = FALSE)
-
 
 
 ```

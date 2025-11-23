@@ -1,0 +1,610 @@
+The purpose of this file is to do the model selection for the manuscript (write better later)
+
+1. main model selection table for manuscript
+2. out of sample test for models
+
+
+```{r}
+#Clear everything out and start fresh
+rm(list=ls())
+library(reproducible) #setting up directories for data management
+library(readr)        #Needed to read and merge all the csv's in the camera folder
+library(dplyr)        #data wranglin'
+library(lubridate)    #datetime manipulation
+library(tidyr)        #more data manipulation
+library(stringr)      #detecting character strings
+library(ggplot2)      #data visualization
+library(purrr)        #feline-friendly loops 
+library(corrplot)     #correlation tests
+library(MuMIn)
+library(ggeffects)
+
+
+#This just sets up files for inputs (already created, must contain your files), and outputs
+input_directory<-reproducible::checkPath(file.path(getwd(), "2. Site Variables/outputs"), create = TRUE)
+output_directory<-reproducible::checkPath(file.path(getwd(), "3. Model Selection/outputs"), create = TRUE)
+figure_directory<-reproducible::checkPath(file.path(getwd(), "3. Model Selection/figures"), create = TRUE)
+
+
+#read in the files we need
+#This is from the species response variable file
+wtd_dets<-read.csv(file.path(input_directory, "final_df.csv"))
+
+
+
+```
+
+Lets prepare the data for modeling.
+```{r}
+
+#PC variables are already scaled, but lets scale the remaining variables
+wtd_dets<-wtd_dets%>%
+  mutate(across(c(disturbance_index, polygonal_index, linear_index, mean_snow_spatial, snow_anomaly, predator_index, lat), .fns = ~ as.numeric(scale(.x))))
+
+         
+#Lets do a quick check of correlations
+vars <- wtd_dets %>%
+  dplyr::select(disturbance_index, polygonal_index, linear_index, mean_snow_spatial, snow_anomaly, predator_index, lat, PC1, PC2)
+
+# Compute correlation matrix (use complete.obs to ignore NAs)
+cor_matrix <- cor(vars, use = "complete.obs")
+
+
+#And now lets identify the actual correlation values to report in the manuscrpt
+cor_df <- as.data.frame(cor_matrix) %>%
+  tibble::rownames_to_column(var = "var1") %>%
+  pivot_longer(
+    cols = -var1,
+    names_to = "var2",
+    values_to = "correlation"
+  )%>%
+  # Remove self-correlations and duplicate pairs easy peasy (or is it peazy?)
+  filter(var1 < var2)%>%
+   # Keep only strong correlations
+  filter(abs(correlation) >= 0.5)%>%
+  arrange(desc(abs(correlation)))
+
+#Yeah so there is a strong correlation between polygonal features and total disturbance, this makes sense right, since if you think about it, the disturbance measure is the sum of all polygonal and linear features. And since linear features are such a small footprint, the majority of the total disturbance is just polygonal. So we wont model total disturbance, and make sure we talk about that in the manuscript
+
+#What is the actual value to report though
+cor.test(wtd_dets$disturbance_index, wtd_dets$polygonal_index)
+
+
+# Print the correlation matrix now without disturbance index
+vars <- wtd_dets %>%
+  dplyr::select(#disturbance_index, 
+                polygonal_index, linear_index, mean_snow_spatial, snow_anomaly, predator_index, lat, PC1, PC2)
+cor_matrix <- cor(vars, use = "complete.obs")
+print(round(cor_matrix, 2))
+
+#Produce the plot and save it
+png(file.path(figure_directory, "correlation_plot.png"))
+corrplot(cor_matrix, method = "color", type = "upper", 
+         tl.col = "black", tl.srt = 45, addCoef.col = "black")  
+dev.off()
+
+
+```
+
+
+
+Now for males
+```{r}
+
+#Global model - note that overall disturbance and polygonal disturbance are highly correlated....
+global_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                     polygonal_index+
+                     linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                   mean_snow_spatial+
+                   snow_anomaly+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(global_males)
+
+#What about a "null" model that doesn't include disturbance?
+null_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   #  polygonal_index+
+                  #   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                   mean_snow_spatial+
+                   snow_anomaly+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(null_males)
+
+
+
+#All disturbance
+# disturbance_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+#                    disturbance_index+
+#                    PC1 + PC2 + #Habitat covariates
+#                    predator_index + #Predator index
+#                    lat+
+#                    mean_snow_spatial*disturbance_index+
+#                    snow_anomaly*disturbance_index+
+#                    (1|array),
+#                  family = "binomial",
+#                  data = wtd_dets)
+# summary(disturbance_males)
+
+#Polygonal -THIS IS THE TOP MODEL FOR ALL DEER
+polygonal_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(polygonal_males)
+
+
+#Linear
+linear_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(linear_males)
+
+
+
+#Model selection and cleanup into a nice dataframe!
+model_selection_male<- as.data.frame(model.sel(global_males, null_males, linear_males, polygonal_males,
+              rank = "AICc"))
+
+model_selection_male<-model_selection_male%>%
+  # Add model names as a column
+  mutate(model = rownames(model_selection_male)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+
+rownames(model_selection_male)<-NULL
+
+
+
+
+```
+
+
+Females
+```{r}
+#Global model - note that overall disturbance and polygonal disturbance are highly correlated....
+global_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                     polygonal_index+
+                     linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                   mean_snow_spatial+
+                   snow_anomaly+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(global_females)
+
+#What about a "null" model that doesn't include disturbance?
+null_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   #  polygonal_index+
+                  #   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                   mean_snow_spatial+
+                   snow_anomaly+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(null_females)
+
+#Polygonal -THIS IS THE TOP MODEL FOR ALL DEER
+polygonal_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                     lat+
+                   mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(polygonal_females)
+
+
+#Linear
+linear_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                     lat+
+                   mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(linear_females)
+
+
+
+#Model selection and cleanup into a nice dataframe!
+model_selection_females<- as.data.frame(model.sel(global_females, null_females, linear_females, polygonal_females,
+              rank = "AICc"))
+
+model_selection_females<-model_selection_females%>%
+  # Add model names as a column
+  mutate(model = rownames(model_selection_females)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+
+rownames(model_selection_females)<-NULL
+
+
+
+
+```
+
+
+Young Deer?
+```{r}
+#All disturbance
+#Global model - note that overall disturbance and polygonal disturbance are highly correlated....
+global_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                     polygonal_index+
+                     linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                   mean_snow_spatial+
+                   snow_anomaly+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(global_young)
+
+#What about a "null" model that doesn't include disturbance?
+null_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   #  polygonal_index+
+                  #   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                   mean_snow_spatial+
+                   snow_anomaly+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(null_young)
+
+#Polygonal -THIS IS THE TOP MODEL FOR ALL DEER
+polygonal_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                     lat+
+                   mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(polygonal_young)
+
+
+#Linear
+linear_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                     lat+
+                   mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(linear_young)
+
+
+
+#Model selection and cleanup into a nice dataframe!
+model_selection_young<- as.data.frame(model.sel(global_young, null_young, linear_young, polygonal_young,
+              rank = "AICc"))
+
+model_selection_young<-model_selection_young%>%
+  # Add model names as a column
+  mutate(model = rownames(model_selection_young)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+
+rownames(model_selection_young)<-NULL
+
+
+
+```
+
+Nicely format those model seleciton tables, this is a key result!
+```{r}
+model_selection_male
+model_selection_females
+model_selection_young
+
+
+#--- Helper function to clean each table ---
+clean_table <- function(df, group_name) {
+  df %>%
+    mutate(
+      group = group_name,
+
+      # Extract just the model part before the underscore
+      model = str_extract(model, "^[^_]+"),
+
+      # Convert to nice names
+      model = factor(model,
+                     levels = c("linear", "polygonal", "global", "null"),
+                     labels = c("Linear", "Polygonal", "Global", "Null"))
+    )
+}
+
+# Clean all three
+male_clean    <- clean_table(model_selection_male,    "Males")
+female_clean  <- clean_table(model_selection_females, "Lone Females")
+young_clean   <- clean_table(model_selection_young,   "Females With Young")
+
+combined_models <- bind_rows(male_clean, female_clean, young_clean)%>%
+  relocate(group)%>%
+  mutate(logLik = round(logLik, digits = 2),
+         AICc = round(AICc, digits = 2),
+         delta = round(delta, digits = 2))
+
+
+
+
+library(flextable)
+library(officer)
+
+# Convert to a nice Word table
+ft <- flextable::flextable(combined_models)
+
+# Optimize the widths and heights of columns. Nice to have!
+ft <- flextable::autofit(ft)
+
+#And then turn that into an actual word document
+doc <- officer::read_docx()
+doc <- flextable::body_add_flextable(doc, ft)
+
+#Now actually write the file
+print(doc, target = file.path(output_directory, "model_selection_results.docx"))
+
+```
+
+
+
+
+Ok, in the following here is what I want to do. I want to write a loop that performs an out of sample test of our model selection, to identify where the "best" top model is identified
+```{r}
+
+#These are the response variables to iterate over
+response_variables<-data.frame(response = c("cbind(n_male, (n_weeks - n_male)) ~",
+                      "cbind(n_female, (n_weeks - n_female)) ~",
+                      "cbind(n_young, (n_weeks - n_young)) ~"),
+                      name = c("males", "females", "young"))
+
+
+#Create a blank list of model selection tables
+model_selection_tables<-list()
+
+#How many simulations to do?
+n_sims<-100
+
+
+#Random seed
+set.seed(420)
+for(j in 1:nrow(response_variables)){
+    
+  #Store the current response variable we are working on 
+  response <- as.character(response_variables[j, 1])
+  #And the name, we will need that for later
+  name<- as.character(response_variables[j, 2])
+  
+  print(paste("Working on models for", name, "at", Sys.time()))
+  
+  
+  #Pre-emptive, but its more efficient to define the model formulas here within this loop, so its only done once per group rather than everytime within the next loop! #Efficiency 101 baby
+  formula_global<- as.formula(paste(response,
+                      "polygonal_index+linear_index+PC1 + PC2 +predator_index +lat+mean_snow_spatial+snow_anomaly+
+                           + (1|array)", sep = ""))
+  
+  formula_null<- as.formula(paste(response,
+                      "PC1 + PC2 +predator_index +lat+mean_snow_spatial+snow_anomaly+
+                           + (1|array)", sep = "")) 
+  formula_linear<- as.formula(paste(response,
+                      "linear_index+
+                      PC1 + PC2 +predator_index +lat+
+                      mean_snow_spatial*linear_index+
+                      snow_anomaly*linear_index+
+                           + (1|array)", sep = ""))
+  formula_polygonal<- as.formula(paste(response,
+                      "polygonal_index+
+                      PC1 + PC2 +predator_index +lat+
+                      mean_snow_spatial*polygonal_index+
+                      snow_anomaly*polygonal_index+
+                           + (1|array)", sep = ""))
+  
+  
+  #Now that we have identified our response variable, we need to many
+  #many times sample the data, fit each model, run model selection,
+  #and identify the top model. 
+  for(i in 1:n_sims){
+    
+    #Sample the dataframe - THIS IS WHERE WE DEFINE THE SAMPLING AMOUNT
+    sample<-wtd_dets%>%
+      slice_sample(prop = 0.90)
+    
+    
+    #Fit each model!
+    fit_global<-glmmTMB::glmmTMB(
+                formula = formula_global,
+                 family = "binomial",
+                 data = sample)
+    
+    fit_null<-glmmTMB::glmmTMB(
+                formula = formula_null,
+                 family = "binomial",
+                 data = sample)
+    
+    fit_linear<-glmmTMB::glmmTMB(
+                formula = formula_linear,
+                 family = "binomial",
+                 data = sample)
+    
+    fit_polygonal<-glmmTMB::glmmTMB(
+                formula = formula_polygonal,
+                 family = "binomial",
+                 data = sample)
+    
+    #Quick model selection! and cleanup
+   model_sel<-as.data.frame(MuMIn::model.sel(fit_global, fit_null, fit_linear, fit_polygonal,
+              rank = "AICc"))
+   
+   model_sel<-model_sel%>%
+    # Add model names as a column
+  mutate(model = rownames(model_sel)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+   
+   #Get rid of the rownames, they are annoying
+   rownames(model_sel)<-NULL
+   
+   #Add the name, and the simulation number to this dataframe
+   model_sel<-model_sel%>%
+     mutate(group = name,
+            simulation = i)%>%
+     relocate(group, simulation)
+   
+   # Initialize the nested list if this is the first simulation for this group
+if (! name %in% names(model_selection_tables)) {
+  model_selection_tables[[name]] <- list()
+}
+
+# Store the model table for this simulation
+model_selection_tables[[name]][[i]] <- model_sel
+  }
+  
+  #Nothing to see here!
+  
+}
+```
+
+
+And here we are formatting the final figure and whatnot
+```{r}
+#Ok now lets take those results and strip them out into a single dataframe
+all_model_results <- purrr::map_df(
+  model_selection_tables,
+  ~ purrr::map_df(.x, ~ .x)
+)
+
+#And finally, for each group, how often was the top model top?
+all_models <- c("fit_linear", "fit_polygonal", "fit_global", "fit_null")
+
+
+summary_table <-
+  all_model_results %>%
+  # Only the top model per simulation
+  filter(delta == 0) %>%
+  group_by(group, model) %>%
+  summarise(n_obs = n(), .groups = "drop") %>%
+  
+  # Expand so every group has all 4 models
+  tidyr::complete(
+    group,
+    model = all_models,
+    fill = list(n_obs = 0)
+  ) %>%
+  
+  # Add total sims and proportion
+  mutate(
+    total = n_sims,
+    prop_top = n_obs / total
+  )
+
+#And a plot!
+# Set factor order
+summary_table <- summary_table %>%
+  mutate(
+    group = factor(group,
+                   levels = c("males", "females", "young"),
+                   labels = c("Males", "Lone Females", "Females With Young")),
+    model = factor(model,
+                   levels = c("fit_linear", "fit_polygonal", "fit_global", "fit_null"),
+                   labels = c("Linear", "Polygonal", "Global", "Null")))
+
+#Define the colour blind paletee 
+okabe_ito <- c(
+  "Linear"     = "#0072B2",
+  "Polygonal"  = "#E69F00",
+  "Global"     = "#009E73",
+  "Null"       = "#D55E00"
+)
+
+#Save that figure
+model_selection_validation_plot<-ggplot(summary_table, aes(x = model, y = prop_top, fill = model)) +
+  geom_col(width = 0.7, alpha = 0.9) +
+  
+  # Add bar labels
+  geom_text(aes(label = round(prop_top, 2)),
+            vjust = -0.3,            # position above bar
+            size = 4,                # text size
+            fontface = "bold") +     # optional
+  
+  facet_wrap(~ group) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)),
+                     limits = c(0, 1)) +
+  scale_fill_manual(values = okabe_ito) +
+  labs(
+    title = "Proportion of Samples in Which Each Model Was Top",
+    x = "Model",
+    y = "Proportion Top Model"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_text(face = "bold")
+  )
+
+
+#Save that figure
+#Save that figure 
+ggsave(filename = "model_selection_validation_plot.jpeg", #name
+        plot = model_selection_validation_plot,  #plot you want to save
+        path = figure_directory, #where its saved
+        width = 3000, #how wide
+        height = 2000,#how tall
+         units = "px", #units in pixels
+         bg = 'white') #make sure background is white
+```

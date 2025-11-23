@@ -74,10 +74,695 @@ cor_df <- as.data.frame(cor_matrix) %>%
 
 ```
 
-Switch gas well to a categorical
+
+Ok now for each group I want to fit the three models and see what results pop out. Lets deal with all deer first
 ```{r}
 
+#All disturbance
+disturbance_all<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
+                   disturbance_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   mean_snow_spatial*disturbance_index+
+                   snow_anomaly*disturbance_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(disturbance_all)
+
+#Polygonal -THIS IS THE TOP MODEL FOR ALL DEER
+polygonal_all<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(polygonal_all)
+
+
+#Linear
+linear_all<-glmmTMB::glmmTMB(cbind(deer_present, (n_weeks - deer_present)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(linear_all)
+
+
+
+#Model selection and cleanup into a nice dataframe!
+model_selection_all<- as.data.frame(model.sel(disturbance_all, linear_all, polygonal_all,
+              rank = "AICc"))
+
+model_selection_all<-model_selection_all%>%
+  # Add model names as a column
+  mutate(model = rownames(model_selection_all)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+
+rownames(model_selection_all)<-NULL
+
+
+#Model predictions for the polygonal and the linear
+polygon_QL<-quantile(wtd_dets$polygonal_index, 0.10, na.rm = TRUE)
+polygon_QH<-quantile(wtd_dets$polygonal_index, 0.90, na.rm = TRUE)
+
+linear_QL<-quantile(wtd_dets$linear_index, 0.10, na.rm = TRUE)
+linear_QH<-quantile(wtd_dets$linear_index, 0.90, na.rm = TRUE)
+
+disturbance_QL<-quantile(wtd_dets$disturbance_index, 0.10, na.rm = TRUE)
+disturbance_QH<-quantile(wtd_dets$disturbance_index, 0.90, na.rm = TRUE)
+
+#Predictions for each disturbance type and snow interaction
+disturbance_spatial_all<-ggeffects::ggpredict(
+             disturbance_all,
+  terms = c("mean_snow_spatial [all]",
+            paste0("disturbance_index [", round(disturbance_QL, 2), ",", round(disturbance_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_spatial= x,
+         disturbance_quantile = group)
+
+
+polygon_spatial_all<-ggeffects::ggpredict(
+             polygonal_all,
+  terms = c("mean_snow_spatial [all]",
+            paste0("polygonal_index [", round(polygon_QL, 2), ",", round(polygon_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_spatial= x,
+         polygonal_quantile = group)
+
+linear_spatial_all<-ggeffects::ggpredict(
+             linear_all,
+  terms = c("mean_snow_spatial [all]",
+            paste0("linear_index [", round(linear_QL, 2), ",", round(linear_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_spatial= x,
+         linear_quantile = group)
+
+m1<-ggplot(disturbance_spatial_all, aes(x = snow_spatial, y = predicted, colour = disturbance_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = disturbance_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("All deer ~ disturbance:mean snow")
+
+
+m2<-ggplot(polygon_spatial_all, aes(x = snow_spatial, y = predicted, colour = polygonal_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = polygonal_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("All deer ~ polygonal:mean snow")
+
+m3<-ggplot(linear_spatial_all, aes(x = snow_spatial, y = predicted, colour = linear_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = linear_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("All deer ~ linear:mean snow")
+
+#Snow anomaly
+
+disturbance_anomaly_all<-ggeffects::ggpredict(
+             disturbance_all,
+  terms = c("snow_anomaly [all]",
+            paste0("disturbance_index [", round(disturbance_QL, 2), ",", round(disturbance_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_anomaly= x,
+         disturbance_quantile = group)
+
+
+polygon_anomaly_all<-ggeffects::ggpredict(
+             polygonal_all,
+  terms = c("snow_anomaly [all]",
+            paste0("polygonal_index [", round(polygon_QL, 2), ",", round(polygon_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_anomaly= x,
+         polygonal_quantile = group)
+
+linear_anomaly_all<-ggeffects::ggpredict(
+             linear_all,
+  terms = c("snow_anomaly [all]",
+            paste0("linear_index [", round(linear_QL, 2), ",", round(linear_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_anomaly= x,
+         linear_quantile = group)
+
+
+m4<-ggplot(disturbance_anomaly_all, aes(x = snow_anomaly, y = predicted, colour = disturbance_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = disturbance_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("All deer ~ disturbance:snow anomaly")
+
+m5<-ggplot(polygon_anomaly_all, aes(x = snow_anomaly, y = predicted, colour = polygonal_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = polygonal_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("All deer ~ polygonal:snow anomaly")
+
+m6<-ggplot(linear_anomaly_all, aes(x = snow_anomaly, y = predicted, colour = linear_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = linear_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("All deer ~ linear:snow anomaly")
+
+
+
+#Put them all together
+ggpubr::ggarrange(m1, m2, m3, m4, m5, m6, nrow = 2, ncol = 3)
+
+
 ```
+
+
+
+Now for males
+```{r}
+
+#All disturbance
+disturbance_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   disturbance_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   mean_snow_spatial*disturbance_index+
+                   snow_anomaly*disturbance_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(disturbance_males)
+
+#Polygonal -THIS IS THE TOP MODEL FOR ALL DEER
+polygonal_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(polygonal_males)
+
+
+#Linear
+linear_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(linear_males)
+
+
+
+#Model selection and cleanup into a nice dataframe!
+model_selection_male<- as.data.frame(model.sel(disturbance_males, linear_males, polygonal_males,
+              rank = "AICc"))
+
+model_selection_male<-model_selection_male%>%
+  # Add model names as a column
+  mutate(model = rownames(model_selection_male)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+
+rownames(model_selection_male)<-NULL
+
+
+#Model predictions for the polygonal and the linear
+polygon_QL<-quantile(wtd_dets$polygonal_index, 0.10, na.rm = TRUE)
+polygon_QH<-quantile(wtd_dets$polygonal_index, 0.90, na.rm = TRUE)
+
+linear_QL<-quantile(wtd_dets$linear_index, 0.10, na.rm = TRUE)
+linear_QH<-quantile(wtd_dets$linear_index, 0.90, na.rm = TRUE)
+
+disturbance_QL<-quantile(wtd_dets$disturbance_index, 0.10, na.rm = TRUE)
+disturbance_QH<-quantile(wtd_dets$disturbance_index, 0.90, na.rm = TRUE)
+
+#Predictions for each disturbance type and snow interaction
+disturbance_spatial_males<-ggeffects::ggpredict(
+             disturbance_males,
+  terms = c("mean_snow_spatial [all]",
+            paste0("disturbance_index [", round(disturbance_QL, 2), ",", round(disturbance_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_spatial= x,
+         disturbance_quantile = group)
+
+
+polygon_spatial_males<-ggeffects::ggpredict(
+             polygonal_males,
+  terms = c("mean_snow_spatial [all]",
+            paste0("polygonal_index [", round(polygon_QL, 2), ",", round(polygon_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_spatial= x,
+         polygonal_quantile = group)
+
+linear_spatial_males<-ggeffects::ggpredict(
+             linear_males,
+  terms = c("mean_snow_spatial [all]",
+            paste0("linear_index [", round(linear_QL, 2), ",", round(linear_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_spatial= x,
+         linear_quantile = group)
+
+m1<-ggplot(disturbance_spatial_males, aes(x = snow_spatial, y = predicted, colour = disturbance_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = disturbance_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("Male deer ~ disturbance:mean snow")
+
+
+m2<-ggplot(polygon_spatial_males, aes(x = snow_spatial, y = predicted, colour = polygonal_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = polygonal_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("Male deer ~ polygonal:mean snow")
+
+m3<-ggplot(linear_spatial_males, aes(x = snow_spatial, y = predicted, colour = linear_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = linear_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("Male deer ~ linear:mean snow")
+
+#Snow anomaly
+
+disturbance_anomaly_males<-ggeffects::ggpredict(
+             disturbance_males,
+  terms = c("snow_anomaly [all]",
+            paste0("disturbance_index [", round(disturbance_QL, 2), ",", round(disturbance_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_anomaly= x,
+         disturbance_quantile = group)
+
+
+polygon_anomaly_males<-ggeffects::ggpredict(
+             polygonal_males,
+  terms = c("snow_anomaly [all]",
+            paste0("polygonal_index [", round(polygon_QL, 2), ",", round(polygon_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_anomaly= x,
+         polygonal_quantile = group)
+
+linear_anomaly_males<-ggeffects::ggpredict(
+             linear_males,
+  terms = c("snow_anomaly [all]",
+            paste0("linear_index [", round(linear_QL, 2), ",", round(linear_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_anomaly= x,
+         linear_quantile = group)
+
+
+m4<-ggplot(disturbance_anomaly_males, aes(x = snow_anomaly, y = predicted, colour = disturbance_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = disturbance_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("MAle deer ~ disturbance:snow anomaly")
+
+m5<-ggplot(polygon_anomaly_males, aes(x = snow_anomaly, y = predicted, colour = polygonal_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = polygonal_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("Male deer ~ polygonal:snow anomaly")
+
+m6<-ggplot(linear_anomaly_males, aes(x = snow_anomaly, y = predicted, colour = linear_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = linear_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("Male deer ~ linear:snow anomaly")
+
+
+
+#Put them all together
+ggpubr::ggarrange(m1, m2, m3, m4, m5, m6, nrow = 2, ncol = 3)
+
+
+```
+
+
+Females
+```{r}
+#All disturbance
+disturbance_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   disturbance_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   mean_snow_spatial*disturbance_index+
+                   snow_anomaly*disturbance_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(disturbance_females)
+
+#Polygonal -THIS IS THE TOP MODEL FOR ALL DEER
+polygonal_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(polygonal_females)
+
+
+#Linear
+linear_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(linear_females)
+
+
+
+#Model selection and cleanup into a nice dataframe!
+model_selection_females<- as.data.frame(model.sel(disturbance_females, linear_females, polygonal_females,
+              rank = "AICc"))
+
+model_selection_females<-model_selection_females%>%
+  # Add model names as a column
+  mutate(model = rownames(model_selection_females)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+
+rownames(model_selection_females)<-NULL
+
+
+#Model predictions for the polygonal and the linear
+polygon_QL<-quantile(wtd_dets$polygonal_index, 0.10, na.rm = TRUE)
+polygon_QH<-quantile(wtd_dets$polygonal_index, 0.90, na.rm = TRUE)
+
+linear_QL<-quantile(wtd_dets$linear_index, 0.10, na.rm = TRUE)
+linear_QH<-quantile(wtd_dets$linear_index, 0.90, na.rm = TRUE)
+
+disturbance_QL<-quantile(wtd_dets$disturbance_index, 0.10, na.rm = TRUE)
+disturbance_QH<-quantile(wtd_dets$disturbance_index, 0.90, na.rm = TRUE)
+
+#Predictions for each disturbance type and snow interaction
+disturbance_spatial_females<-ggeffects::ggpredict(
+             disturbance_females,
+  terms = c("mean_snow_spatial [all]",
+            paste0("disturbance_index [", round(disturbance_QL, 2), ",", round(disturbance_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_spatial= x,
+         disturbance_quantile = group)
+
+
+polygon_spatial_females<-ggeffects::ggpredict(
+             polygonal_females,
+  terms = c("mean_snow_spatial [all]",
+            paste0("polygonal_index [", round(polygon_QL, 2), ",", round(polygon_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_spatial= x,
+         polygonal_quantile = group)
+
+linear_spatial_females<-ggeffects::ggpredict(
+             linear_females,
+  terms = c("mean_snow_spatial [all]",
+            paste0("linear_index [", round(linear_QL, 2), ",", round(linear_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_spatial= x,
+         linear_quantile = group)
+
+m1<-ggplot(disturbance_spatial_females, aes(x = snow_spatial, y = predicted, colour = disturbance_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = disturbance_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("female deer ~ disturbance:mean snow")
+
+
+m2<-ggplot(polygon_spatial_females, aes(x = snow_spatial, y = predicted, colour = polygonal_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = polygonal_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("female deer ~ polygonal:mean snow")
+
+m3<-ggplot(linear_spatial_females, aes(x = snow_spatial, y = predicted, colour = linear_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = linear_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("female deer ~ linear:mean snow")
+
+#Snow anomaly
+
+disturbance_anomaly_females<-ggeffects::ggpredict(
+             disturbance_females,
+  terms = c("snow_anomaly [all]",
+            paste0("disturbance_index [", round(disturbance_QL, 2), ",", round(disturbance_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_anomaly= x,
+         disturbance_quantile = group)
+
+
+polygon_anomaly_females<-ggeffects::ggpredict(
+             polygonal_females,
+  terms = c("snow_anomaly [all]",
+            paste0("polygonal_index [", round(polygon_QL, 2), ",", round(polygon_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_anomaly= x,
+         polygonal_quantile = group)
+
+linear_anomaly_females<-ggeffects::ggpredict(
+             linear_females,
+  terms = c("snow_anomaly [all]",
+            paste0("linear_index [", round(linear_QL, 2), ",", round(linear_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_anomaly= x,
+         linear_quantile = group)
+
+
+m4<-ggplot(disturbance_anomaly_females, aes(x = snow_anomaly, y = predicted, colour = disturbance_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = disturbance_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("femAle deer ~ disturbance:snow anomaly")
+
+m5<-ggplot(polygon_anomaly_females, aes(x = snow_anomaly, y = predicted, colour = polygonal_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = polygonal_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("female deer ~ polygonal:snow anomaly")
+
+m6<-ggplot(linear_anomaly_females, aes(x = snow_anomaly, y = predicted, colour = linear_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = linear_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("female deer ~ linear:snow anomaly")
+
+
+
+#Put them all together
+ggpubr::ggarrange(m1, m2, m3, m4, m5, m6, nrow = 2, ncol = 3)
+
+
+```
+
+
+Young Deer?
+```{r}
+#All disturbance
+disturbance_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   disturbance_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   mean_snow_spatial*disturbance_index+
+                   snow_anomaly*disturbance_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(disturbance_young)
+
+#Polygonal -THIS IS THE TOP MODEL FOR ALL DEER
+polygonal_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(polygonal_young)
+
+
+#Linear
+linear_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(linear_young)
+
+
+
+#Model selection and cleanup into a nice dataframe!
+model_selection_young<- as.data.frame(model.sel(disturbance_young, linear_young, polygonal_young,
+              rank = "AICc"))
+
+model_selection_young<-model_selection_young%>%
+  # Add model names as a column
+  mutate(model = rownames(model_selection_young)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+
+rownames(model_selection_young)<-NULL
+
+
+#Model predictions for the polygonal and the linear
+polygon_QL<-quantile(wtd_dets$polygonal_index, 0.10, na.rm = TRUE)
+polygon_QH<-quantile(wtd_dets$polygonal_index, 0.90, na.rm = TRUE)
+
+linear_QL<-quantile(wtd_dets$linear_index, 0.10, na.rm = TRUE)
+linear_QH<-quantile(wtd_dets$linear_index, 0.90, na.rm = TRUE)
+
+disturbance_QL<-quantile(wtd_dets$disturbance_index, 0.10, na.rm = TRUE)
+disturbance_QH<-quantile(wtd_dets$disturbance_index, 0.90, na.rm = TRUE)
+
+#Predictions for each disturbance type and snow interaction
+disturbance_spatial_young<-ggeffects::ggpredict(
+             disturbance_young,
+  terms = c("mean_snow_spatial [all]",
+            paste0("disturbance_index [", round(disturbance_QL, 2), ",", round(disturbance_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_spatial= x,
+         disturbance_quantile = group)
+
+
+polygon_spatial_young<-ggeffects::ggpredict(
+             polygonal_young,
+  terms = c("mean_snow_spatial [all]",
+            paste0("polygonal_index [", round(polygon_QL, 2), ",", round(polygon_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_spatial= x,
+         polygonal_quantile = group)
+
+linear_spatial_young<-ggeffects::ggpredict(
+             linear_young,
+  terms = c("mean_snow_spatial [all]",
+            paste0("linear_index [", round(linear_QL, 2), ",", round(linear_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_spatial= x,
+         linear_quantile = group)
+
+m1<-ggplot(disturbance_spatial_young, aes(x = snow_spatial, y = predicted, colour = disturbance_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = disturbance_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("female deer with young ~ disturbance:mean snow")
+
+
+m2<-ggplot(polygon_spatial_young, aes(x = snow_spatial, y = predicted, colour = polygonal_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = polygonal_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("female deer with young  ~ polygonal:mean snow")
+
+m3<-ggplot(linear_spatial_young, aes(x = snow_spatial, y = predicted, colour = linear_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = linear_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("female deer with young  ~ linear:mean snow")
+
+#Snow anomaly
+
+disturbance_anomaly_young<-ggeffects::ggpredict(
+             disturbance_young,
+  terms = c("snow_anomaly [all]",
+            paste0("disturbance_index [", round(disturbance_QL, 2), ",", round(disturbance_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_anomaly= x,
+         disturbance_quantile = group)
+
+
+polygon_anomaly_young<-ggeffects::ggpredict(
+             polygonal_young,
+  terms = c("snow_anomaly [all]",
+            paste0("polygonal_index [", round(polygon_QL, 2), ",", round(polygon_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_anomaly= x,
+         polygonal_quantile = group)
+
+linear_anomaly_young<-ggeffects::ggpredict(
+             linear_young,
+  terms = c("snow_anomaly [all]",
+            paste0("linear_index [", round(linear_QL, 2), ",", round(linear_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_anomaly= x,
+         linear_quantile = group)
+
+
+m4<-ggplot(disturbance_anomaly_young, aes(x = snow_anomaly, y = predicted, colour = disturbance_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = disturbance_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("femAle deer with young  ~ disturbance:snow anomaly")
+
+m5<-ggplot(polygon_anomaly_young, aes(x = snow_anomaly, y = predicted, colour = polygonal_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = polygonal_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("female deer with young  ~ polygonal:snow anomaly")
+
+m6<-ggplot(linear_anomaly_young, aes(x = snow_anomaly, y = predicted, colour = linear_quantile)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = linear_quantile),
+              alpha = 0.15, colour = NA)+
+  ggtitle("female deer with young  ~ linear:snow anomaly")
+
+
+
+#Put them all together
+ggpubr::ggarrange(m1, m2, m3, m4, m5, m6, nrow = 2, ncol = 3)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
