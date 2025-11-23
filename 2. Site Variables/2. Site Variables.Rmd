@@ -384,8 +384,6 @@ Write that final dataframe
 write.csv(wtd_dets, file.path(output_directory, "final_df.csv"),
           row.names = FALSE)
 
-#write.csv(wtd_dets_clean, file.path(output_directory, "final_df.csv"),
-  #        row.names = FALSE)
 
 
 ```

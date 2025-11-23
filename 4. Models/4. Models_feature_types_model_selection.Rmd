@@ -1,8 +1,6 @@
-The purpose of this file is to do the model selection for the manuscript (write better later)
-
-1. main model selection table for manuscript
-2. out of sample test for models
-
+This to-do in this section
+1. Code models for each demographic group - polygonal and linear
+2. Model predictions for each group - 3 main figures
 
 ```{r}
 #Clear everything out and start fresh
@@ -21,9 +19,9 @@ library(ggeffects)
 
 
 #This just sets up files for inputs (already created, must contain your files), and outputs
-input_directory<-reproducible::checkPath(file.path(getwd(), "2. Site Variables/outputs"), create = TRUE)
-output_directory<-reproducible::checkPath(file.path(getwd(), "3. Model Selection/outputs"), create = TRUE)
-figure_directory<-reproducible::checkPath(file.path(getwd(), "3. Model Selection/figures"), create = TRUE)
+input_directory<-reproducible::checkPath(file.path(getwd(), "3. Model Selection/outputs"), create = TRUE)
+output_directory<-reproducible::checkPath(file.path(getwd(), "4. Models/outputs"), create = TRUE)
+figure_directory<-reproducible::checkPath(file.path(getwd(), "4. Models/figures"), create = TRUE)
 
 
 #read in the files we need
@@ -34,66 +32,66 @@ wtd_dets<-read.csv(file.path(input_directory, "final_df.csv"))
 
 ```
 
-Lets prepare the data for modeling.
+Ok everything has been prepared for modeling, so I guess I can just get to it. So a few things to do for each demographic group. Fit the linear and the polygonal model, report the coefficients, get the model predictions, run the diagnostics. Wondering if the diagnostics should maybe be in another script but we will see 
+
+This is a silly little chunk, but I need to define the linear and polygonal lower and upper quantiles that we will make model predictions for. Rather than randomly do this in one of the chunks, I am just doing it here (only need to do it once since the values to predict for are all the same!)
 ```{r}
+#Lower and upper quantiles for linear
+linear_QL<-quantile(wtd_dets$linear_index, 0.10, na.rm = TRUE)
+linear_QH<-quantile(wtd_dets$linear_index, 0.90, na.rm = TRUE)
 
-#PC variables are already scaled, but lets scale the remaining variables
-wtd_dets<-wtd_dets%>%
-  mutate(across(c(disturbance_index, polygonal_index, linear_index, mean_snow_spatial, snow_anomaly, predator_index, lat), .fns = ~ as.numeric(scale(.x))))
+#Lower and upper quantiles for polygonal
+polygonal_QL<-quantile(wtd_dets$polygonal_index, 0.10, na.rm = TRUE)
+polygonal_QH<-quantile(wtd_dets$polygonal_index, 0.90, na.rm = TRUE)
 
-         
-#Lets do a quick check of correlations
-vars <- wtd_dets %>%
-  dplyr::select(disturbance_index, polygonal_index, linear_index, mean_snow_spatial, snow_anomaly, predator_index, lat, PC1, PC2)
-
-# Compute correlation matrix (use complete.obs to ignore NAs)
-cor_matrix <- cor(vars, use = "complete.obs")
-
-
-#And now lets identify the actual correlation values to report in the manuscrpt
-cor_df <- as.data.frame(cor_matrix) %>%
-  tibble::rownames_to_column(var = "var1") %>%
-  pivot_longer(
-    cols = -var1,
-    names_to = "var2",
-    values_to = "correlation"
-  )%>%
-  # Remove self-correlations and duplicate pairs easy peasy (or is it peazy?)
-  filter(var1 < var2)%>%
-   # Keep only strong correlations
-  filter(abs(correlation) >= 0.5)%>%
-  arrange(desc(abs(correlation)))
-
-#Yeah so there is a strong correlation between polygonal features and total disturbance, this makes sense right, since if you think about it, the disturbance measure is the sum of all polygonal and linear features. And since linear features are such a small footprint, the majority of the total disturbance is just polygonal. So we wont model total disturbance, and make sure we talk about that in the manuscript
-
-#What is the actual value to report though
-cor.test(wtd_dets$disturbance_index, wtd_dets$polygonal_index)
-
-
-# Print the correlation matrix now without disturbance index
-vars <- wtd_dets %>%
-  dplyr::select(#disturbance_index, 
-                polygonal_index, linear_index, mean_snow_spatial, snow_anomaly, predator_index, lat, PC1, PC2)
-cor_matrix <- cor(vars, use = "complete.obs")
-print(round(cor_matrix, 2))
-
-#Produce the plot and save it
-png(file.path(figure_directory, "correlation_plot.png"))
-corrplot(cor_matrix, method = "color", type = "upper", 
-         tl.col = "black", tl.srt = 45, addCoef.col = "black")  
-dev.off()
-
-
-#Write that dataframe with the scaled variables to the outputs folder (this will be used in the next step for modeling)
-write.csv(wtd_dets, file.path(output_directory, "final_df.csv"), row.names = FALSE)
 
 ```
 
 
 
+Males
+```{r}
+#1. Fit the models
+#2.  Model Predictions
+
+
+#Linear model
+linear_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(linear_males)
+
+#
+
+
+#Polygonal model
+polygonal_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(polygonal_males)
 
 
 
+
+##############################################################################
+#First, LRT tests for each model
+
+
+```
 
 
 Now for males
@@ -351,63 +349,6 @@ rownames(model_selection_young)<-NULL
 
 ```
 
-Nicely format those model seleciton tables, this is a key result!
-```{r}
-model_selection_male
-model_selection_females
-model_selection_young
-
-
-#--- Helper function to clean each table ---
-clean_table <- function(df, group_name) {
-  df %>%
-    mutate(
-      group = group_name,
-
-      # Extract just the model part before the underscore
-      model = str_extract(model, "^[^_]+"),
-
-      # Convert to nice names
-      model = factor(model,
-                     levels = c("linear", "polygonal", "global", "null"),
-                     labels = c("Linear", "Polygonal", "Global", "Null"))
-    )
-}
-
-# Clean all three
-male_clean    <- clean_table(model_selection_male,    "Males")
-female_clean  <- clean_table(model_selection_females, "Lone Females")
-young_clean   <- clean_table(model_selection_young,   "Females With Young")
-
-combined_models <- bind_rows(male_clean, female_clean, young_clean)%>%
-  relocate(group)%>%
-  mutate(logLik = round(logLik, digits = 2),
-         AICc = round(AICc, digits = 2),
-         delta = round(delta, digits = 2))
-
-
-
-
-library(flextable)
-library(officer)
-
-# Convert to a nice Word table
-ft <- flextable::flextable(combined_models)
-
-# Optimize the widths and heights of columns. Nice to have!
-ft <- flextable::autofit(ft)
-
-#And then turn that into an actual word document
-doc <- officer::read_docx()
-doc <- flextable::body_add_flextable(doc, ft)
-
-#Now actually write the file
-print(doc, target = file.path(output_directory, "model_selection_results.docx"))
-
-```
-
-
-
 
 Ok, in the following here is what I want to do. I want to write a loop that performs an out of sample test of our model selection, to identify where the "best" top model is identified
 ```{r}
@@ -426,8 +367,7 @@ model_selection_tables<-list()
 n_sims<-100
 
 
-#Random seed
-set.seed(420)
+
 for(j in 1:nrow(response_variables)){
     
   #Store the current response variable we are working on 
@@ -525,11 +465,7 @@ model_selection_tables[[name]][[i]] <- model_sel
   #Nothing to see here!
   
 }
-```
 
-
-And here we are formatting the final figure and whatnot
-```{r}
 #Ok now lets take those results and strip them out into a single dataframe
 all_model_results <- purrr::map_df(
   model_selection_tables,
@@ -564,37 +500,19 @@ summary_table <-
 # Set factor order
 summary_table <- summary_table %>%
   mutate(
-    group = factor(group,
-                   levels = c("males", "females", "young"),
-                   labels = c("Males", "Lone Females", "Females With Young")),
+    group = factor(group, levels = c("males", "females", "young")),
     model = factor(model,
                    levels = c("fit_linear", "fit_polygonal", "fit_global", "fit_null"),
-                   labels = c("Linear", "Polygonal", "Global", "Null")))
+                   labels = c("Linear", "Polygonal", "Global", "Null"))
+  )
 
-#Define the colour blind paletee 
-okabe_ito <- c(
-  "Linear"     = "#0072B2",
-  "Polygonal"  = "#E69F00",
-  "Global"     = "#009E73",
-  "Null"       = "#D55E00"
-)
-
-#Save that figure
-model_selection_validation_plot<-ggplot(summary_table, aes(x = model, y = prop_top, fill = model)) +
+ggplot(summary_table, aes(x = model, y = prop_top, fill = model)) +
   geom_col(width = 0.7, alpha = 0.9) +
-  
-  # Add bar labels
-  geom_text(aes(label = round(prop_top, 2)),
-            vjust = -0.3,            # position above bar
-            size = 4,                # text size
-            fontface = "bold") +     # optional
-  
   facet_wrap(~ group) +
   scale_y_continuous(expand = expansion(mult = c(0, 0.05)),
                      limits = c(0, 1)) +
-  scale_fill_manual(values = okabe_ito) +
   labs(
-    title = "Proportion of Samples in Which Each Model Was Top",
+    title = "Proportion of Simulations in Which Each Model Was Top",
     x = "Model",
     y = "Proportion Top Model"
   ) +
@@ -605,14 +523,4 @@ model_selection_validation_plot<-ggplot(summary_table, aes(x = model, y = prop_t
     strip.text = element_text(face = "bold")
   )
 
-
-#Save that figure
-#Save that figure 
-ggsave(filename = "model_selection_validation_plot.jpeg", #name
-        plot = model_selection_validation_plot,  #plot you want to save
-        path = figure_directory, #where its saved
-        width = 3000, #how wide
-        height = 2000,#how tall
-         units = "px", #units in pixels
-         bg = 'white') #make sure background is white
 ```

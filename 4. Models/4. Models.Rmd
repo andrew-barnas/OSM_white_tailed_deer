@@ -1,5 +1,6 @@
-The purpose of this file is to do the setup of the response varible for deer? Lets do this clean. 
-
+This to-do in this section
+1. Code models for each demographic group - polygonal and linear
+2. Model predictions for each group - 3 main figures
 
 ```{r}
 #Clear everything out and start fresh
@@ -18,9 +19,9 @@ library(ggeffects)
 
 
 #This just sets up files for inputs (already created, must contain your files), and outputs
-input_directory<-reproducible::checkPath(file.path(getwd(), "2. Site Variables/outputs"), create = TRUE)
-output_directory<-reproducible::checkPath(file.path(getwd(), "3. Models/outputs"), create = TRUE)
-figure_directory<-reproducible::checkPath(file.path(getwd(), "3. Models/figures"), create = TRUE)
+input_directory<-reproducible::checkPath(file.path(getwd(), "3. Model Selection/outputs"), create = TRUE)
+output_directory<-reproducible::checkPath(file.path(getwd(), "4. Models/outputs"), create = TRUE)
+figure_directory<-reproducible::checkPath(file.path(getwd(), "4. Models/figures"), create = TRUE)
 
 
 #read in the files we need
@@ -31,46 +32,282 @@ wtd_dets<-read.csv(file.path(input_directory, "final_df.csv"))
 
 ```
 
-Lets prepare the data for modeling.
+Ok everything has been prepared for modeling, so I guess I can just get to it. So a few things to do for each demographic group. Fit the linear and the polygonal model, report the coefficients, get the model predictions, run the diagnostics. Wondering if the diagnostics should maybe be in another script but we will see 
+
+This is a silly little chunk, but I need to define the linear and polygonal lower and upper quantiles that we will make model predictions for. Rather than randomly do this in one of the chunks, I am just doing it here (only need to do it once since the values to predict for are all the same!)
 ```{r}
-#First deal with wolves, need to morph this into a response variable that makes sense
+#Lower and upper quantiles for linear
+linear_QL<-quantile(wtd_dets$linear_index, 0.10, na.rm = TRUE)
+linear_QH<-quantile(wtd_dets$linear_index, 0.90, na.rm = TRUE)
 
-#wtd_dets<-wtd_dets%>%
-#  mutate(wolf_index = wolf_present/n_weeks)
+#Lower and upper quantiles for polygonal
+polygonal_QL<-quantile(wtd_dets$polygonal_index, 0.10, na.rm = TRUE)
+polygonal_QH<-quantile(wtd_dets$polygonal_index, 0.90, na.rm = TRUE)
 
-#PC variables are already scaled, but lets scale the remaining variables
-wtd_dets<-wtd_dets%>%
-  mutate(across(c(disturbance_index, polygonal_index, linear_index, mean_snow_spatial, snow_anomaly, predator_index, lat), .fns = ~ as.numeric(scale(.x))))
+#Define the colour blind paletee 
+#Linear plot
+okabe_ito_linear <- c(
+  "10%" = "#0072B2",   # blue
+  "90%" = "#D55E00"    # vermillion
+)
+okabe_ito_polgyonal <- c(
+  "10%" = "#009E73",   # blue
+  "90%" = "#E69F00"    # vermillion
+)
+#And this is fun, so in the model selection script, I scaled all the data for modeling process, but later when I make model predictions I want predictions for the unscaled data. So I am going to temporarily read an old file (before things were scaled), extract the information I need (mean and sd for relevant variables), and then remove that dataframe. Savy?
+temp_data<-read.csv(file.path(getwd(), "2. Site Variables/outputs/final_df.csv"))
 
-         
-#Lets do a quick check of correlations
-vars <- wtd_dets %>%
-  dplyr::select(disturbance_index, polygonal_index, linear_index, mean_snow_spatial, snow_anomaly, predator_index, lat, PC1, PC2)
+#long term snow
+snow_spatial_mean<-mean(temp_data$mean_snow_spatial)
+snow_spatial_sd<-sd(temp_data$mean_snow_spatial)
 
-# Compute correlation matrix (use complete.obs to ignore NAs)
-cor_matrix <- cor(vars, use = "complete.obs")
+#Snow anomaly
+snow_anomaly_mean<-mean(temp_data$snow_anomaly)
+snow_anomaly_sd<-sd(temp_data$snow_anomaly)
 
-# Print the correlation matrix
-print(round(cor_matrix, 2))
 
-# Visualize it
-corrplot(cor_matrix, method = "color", type = "upper", 
-         tl.col = "black", tl.srt = 45, addCoef.col = "black")       
+#And get rid of that dusty old dataframe!
+rm(temp_data)
 
-cor_df <- as.data.frame(cor_matrix) %>%
-  tibble::rownames_to_column(var = "var1") %>%
-  pivot_longer(
-    cols = -var1,
-    names_to = "var2",
-    values_to = "correlation"
-  )%>%
-  # Remove self-correlations and duplicate pairs
-  filter(var1 < var2)%>%
-   # Keep only strong correlations
-  filter(abs(correlation) >= 0.6)%>%
-  arrange(desc(abs(correlation)))
+male_axis_limits<-c(0, 0.40)
 
 ```
+
+
+
+Males
+```{r}
+#1. Fit the models
+#2.  Model Predictions
+
+
+#Linear model
+linear_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(linear_males)
+
+#Make predictions from that model
+preds_lms<-data.frame(ggeffects::ggpredict(
+             linear_males,
+  terms = c("mean_snow_spatial [all]",
+            paste0("linear_index [", round(linear_QL, 2), ",", round(linear_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_spatial= x,
+         linear_quantile = group))
+
+#Back transform the snow variable
+preds_lms<- preds_lms %>%
+  mutate( snow_spatial_unscaled = snow_spatial * snow_spatial_sd + snow_spatial_mean)
+
+
+# Ensure your quantile variable has correct labels
+preds_lms$linear_quantile_label <- dplyr::recode(preds_lms$linear_quantile,
+                                                "-1.13"  = "10%",
+                                                "1.04" = "90%")
+#And then the actual plot
+linear_male_snow<-ggplot(preds_lms, aes(x = snow_spatial_unscaled,
+                     y = predicted,
+                     colour = linear_quantile_label)) +
+  geom_line(size = 1.2) +
+  ylim(male_axis_limits)+
+  geom_ribbon(aes(ymin = conf.low,
+                  ymax = conf.high,
+                  fill = linear_quantile_label),
+              alpha = 0.15, colour = NA) +
+  scale_colour_manual(values = okabe_ito_linear,
+                      name = "Linear Index Quantile") +
+  scale_fill_manual(values = okabe_ito_linear,
+                    name = "Linear Index Quantile") +
+  ylab("Predicted Probability of\nWeekly Occurrence ± 95% CI") +
+  xlab("10 Year Average Winter\nSnow-Water Equivalent (kg/m²)") +
+  theme_classic(base_size = 15)
+
+########################################################################################
+#And now predictions for the Snow Anomaly
+preds_lma<-data.frame(ggeffects::ggpredict(
+             linear_males,
+  terms = c("snow_anomaly [all]",
+            paste0("linear_index [", round(linear_QL, 2), ",", round(linear_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_anomaly= x,
+         linear_quantile = group))
+
+#Back transform the snow variable
+preds_lma<- preds_lma %>%
+  mutate( snow_anomaly_unscaled = snow_anomaly * snow_anomaly_sd + snow_anomaly_mean)
+
+hist(preds_lma$snow_anomaly_unscaled)
+
+# Ensure your quantile variable has correct labels
+preds_lma$linear_quantile_label <- dplyr::recode(preds_lma$linear_quantile,
+                                                "-1.13"  = "10%",
+                                                "1.04" = "90%")
+#And then the actual plot
+linear_male_anomaly<-ggplot(preds_lma, aes(x = snow_anomaly_unscaled,
+                     y = predicted,
+                     colour = linear_quantile_label)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low,
+                  ymax = conf.high,
+                  fill = linear_quantile_label),
+              alpha = 0.15, colour = NA) +
+  scale_colour_manual(values = okabe_ito_linear,
+                      name = "Linear Index Quantile") +
+  scale_fill_manual(values = okabe_ito_linear,
+                    name = "Linear Index Quantile") +
+  ylab("Predicted Probability of\nWeekly Occurrence ± 95% CI") +
+  xlab("Snow Anomaly\nSnow-Water Equivalent (kg/m²)") +
+  theme_classic(base_size = 15)+
+  ylim(male_axis_limits)
+
+########################################################################################
+########################################################################################
+########################################################################################
+#Polygonal model and predictions
+polygonal_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(polygonal_males)
+
+
+#Make predictions from that model
+preds_pms<-data.frame(ggeffects::ggpredict(
+             polygonal_males,
+  terms = c("mean_snow_spatial [all]",
+            paste0("polygonal_index [", round(polygonal_QL, 2), ",", round(polygonal_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_spatial= x,
+         polygonal_quantile = group))
+
+#Back transform the snow variable
+preds_pms<- preds_pms %>%
+  mutate( snow_spatial_unscaled = snow_spatial * snow_spatial_sd + snow_spatial_mean)
+
+hist(preds_pms$snow_spatial_unscaled)
+
+# Ensure your quantile variable has correct labels
+preds_pms$polygonal_quantile_label <- dplyr::recode(preds_pms$polygonal_quantile,
+                                                "-0.93"  = "10%",
+                                                "1.39" = "90%")
+#And then the actual plot
+polygonal_male_snow<-ggplot(preds_pms, aes(x = snow_spatial_unscaled,
+                     y = predicted,
+                     colour = polygonal_quantile_label)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low,
+                  ymax = conf.high,
+                  fill = polygonal_quantile_label),
+              alpha = 0.15, colour = NA) +
+  scale_colour_manual(values = okabe_ito_polgyonal,
+                      name = "Polygonal Index Quantile") +
+  scale_fill_manual(values = okabe_ito_polgyonal,
+                    name = "Polygonal Index Quantile") +
+  ylab("Predicted Probability of\nWeekly Occurrence ± 95% CI") +
+  xlab("10 Year Average Winter\nSnow-Water Equivalent (kg/m²)") +
+  theme_classic(base_size = 15)+
+  ylim(male_axis_limits)
+
+#And now the anomaly plots
+#Polygonal model and predictions
+
+
+#Make predictions from that model
+preds_pma<-data.frame(ggeffects::ggpredict(
+             polygonal_males,
+  terms = c("snow_anomaly [all]",
+            paste0("polygonal_index [", round(polygonal_QL, 2), ",", round(polygonal_QH, 2), "]")),
+  type = "fixed")%>%
+  rename(snow_anomaly= x,
+         polygonal_quantile = group))
+
+#Back transform the snow variable
+preds_pma<- preds_pma %>%
+  mutate( snow_anomaly_unscaled = snow_anomaly * snow_anomaly_sd + snow_anomaly_mean)
+
+hist(preds_pma$snow_anomaly_unscaled)
+
+# Ensure your quantile variable has correct labels
+preds_pma$polygonal_quantile_label <- dplyr::recode(preds_pma$polygonal_quantile,
+                                                "-0.93"  = "10%",
+                                                "1.39" = "90%")
+#And then the actual plot
+polygonal_male_anomaly<-ggplot(preds_pma, aes(x = snow_anomaly_unscaled,
+                     y = predicted,
+                     colour = polygonal_quantile_label)) +
+  geom_line(size = 1.2) +
+  geom_ribbon(aes(ymin = conf.low,
+                  ymax = conf.high,
+                  fill = polygonal_quantile_label),
+              alpha = 0.15, colour = NA) +
+  scale_colour_manual(values = okabe_ito_polgyonal,
+                      name = "Polygonal Index Quantile") +
+  scale_fill_manual(values = okabe_ito_polgyonal,
+                    name = "Polygonal Index Quantile") +
+  ylab("Predicted Probability of\nWeekly Occurrence ± 95% CI") +
+  xlab("Snow Anomaly\nSnow-Water Equivalent (kg/m²)") +
+  theme_classic(base_size = 15)+
+  ylim(male_axis_limits)
+
+```
+
+
+Arrange and export the figures here
+```{r}
+
+#Male plots
+linear_male_snow
+linear_male_anomaly
+polygonal_male_snow
+polygonal_male_anomaly
+
+#This is greasy, but here I am arranging two arranged plots twice LOL
+male_models<-ggpubr::ggarrange(
+  
+  #Arrange the linear models together with their common legend
+  ggpubr::ggarrange(linear_male_snow, linear_male_anomaly,
+                  nrow = 2,
+                  common.legend = TRUE,
+                  legend = "top",
+                  labels = c("A", "B"))
+                  ,
+ #Arrange the polygonal models together with their common legend
+ ggpubr::ggarrange(polygonal_male_snow, polygonal_male_anomaly,
+                  nrow = 2,
+                  common.legend = TRUE,
+                  legend = "top",
+                  labels = c("C", "D")),
+
+ncol = 2
+
+)
+
+#And write that figure
+ggsave(filename = "male_models.jpeg", #name
+        plot = male_models,  #plot you want to save
+        path = figure_directory, #where its saved
+        width = 3000, #how wide
+        height = 3000,#how tall
+         units = "px", #units in pixels
+         bg = 'white') #make sure background is white
+
+
+```
+
 
 
 
