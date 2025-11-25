@@ -346,12 +346,49 @@ polygonal_young_reduced<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
                  family = "binomial",
                  data = wtd_dets)
 
+#Ok, create a list of the paired full and reducted models
+lrt_models <- list(
+  linear_males      = list(full = linear_males,      reduced = linear_males_reduced),
+  polygonal_males   = list(full = polygonal_males,   reduced = polygonal_males_reduced),
+  linear_females    = list(full = linear_females,    reduced = linear_females_reduced),
+  polygonal_females = list(full = polygonal_females, reduced = polygonal_females_reduced),
+  linear_young      = list(full = linear_young,      reduced = linear_young_reduced),
+  polygonal_young   = list(full = polygonal_young,   reduced = polygonal_young_reduced)
+)
 
+#And yet again, make a quick little function
+run_lrt <- function(full, reduced) {
+  out <- lmtest::lrtest(full, reduced)
+  broom::tidy(out)  # makes it easy to combine
+}
+
+#Then run that function across the full and reduced models, spitting out a dataframe
+#Its going to give errors but thats fine, the LRT dataframe is funky because it misses entries for some rows
+lrt_results <- map_df(
+  names(lrt_models),
+  ~ run_lrt(lrt_models[[.x]]$reduced, lrt_models[[.x]]$full) %>%
+      mutate(model_name = .x)
+)
+
+#But now we can take that dataframe and extract just what we need for each model (test statistic, df, and P value)
+lrt_results<-lrt_results%>%
+  dplyr::select(model_name, df , statistic, p.value)%>%
+  #Then to be lazy, just keep df = 1 (only need one obs per model name)
+  filter(df == 1)
+
+#And write that file
+write.csv(lrt_results, file.path(output_directory, "lrt_results.csv"),
+          row.names = FALSE)
+```
+
+Should we explore spatial autocorrelation?
+```{r}
 
 
 
 
 ```
+
 
 
 
