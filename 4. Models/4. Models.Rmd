@@ -14,8 +14,9 @@ library(stringr)      #detecting character strings
 library(ggplot2)      #data visualization
 library(purrr)        #feline-friendly loops 
 library(corrplot)     #correlation tests
-library(MuMIn)
-library(ggeffects)
+
+library(performance)  #Model Validation
+library(ggeffects)    #Model predictions
 library(broom.mixed)  #Extracting model coefficients
 library(flextable)    #Formatting and writing to worddoc
 library(officer)      #Formatting and writing to wordoc
@@ -207,10 +208,89 @@ print(doc, target = file.path(output_directory, "model_coefficients.docx"))
 
 Model diagnostics and whatnot go here
 ```{r}
+#Things to check in here
+#Variance Inflation Factors
+#Spatial Autocorrelation  Morans I
+#Random effect LRT
+#
+
+#Variance Inflation Factors for all models
+#We can use the list of models defined above for this
+models
+
+#Create a function to extract the VIFs
+extract_vif <- function(model) {
+  vif_obj <- performance::check_collinearity(model)
+  as.data.frame(vif_obj)[, c("Term", "VIF")]
+}
+
+#And then use that function to create a dataframe of VIFs for each model object
+vif_df_long <- map_df(
+  names(models),
+  ~ extract_vif(models[[.x]]) %>%
+    mutate(model = .x),
+  .id = NULL
+)
+
+#Slightly re-arrange that dataframe
+vif_df_long<-vif_df_long%>%
+  mutate(VIF = round(VIF, digits = 2))%>%
+  pivot_wider(names_from = model, values_from = VIF)
+
+#Export as a csv file
+write.csv(vif_df_long, file.path(output_directory, "variance_inflation_factors.csv"),
+          row.names = FALSE)
+
+# Convert to word doc table for export
+ft <- flextable::flextable(vif_df_long)
+
+# Optimize the widths and heights of columns. Nice to have!
+ft <- flextable::autofit(ft)
+
+#And then turn that into an actual word document
+doc <- officer::read_docx()
+doc <- flextable::body_add_flextable(doc, ft)
+
+#Now actually write the file
+#NOTE - this table is quite big so you'll have to modify it into landscape style manually
+#I tried to do it in the code, but got lost
+print(doc, target = file.path(output_directory, "variance_inflation_factors.docx"))
+
+#########################################################################################
+#Measures of Model Fit
+#Same thing, we can use the list of models, and write a quick function to extract all these values
+
+extract_r2<-function(model){
+  model_fit<-performance::r2(model)
+  as.data.frame(model_fit)[, c("R2_conditional", "R2_marginal")]
+}
+
+ map_df(
+  names(models),
+  ~ extract_r2(models[[.x]]) %>%
+    mutate(model = .x),
+  .id = NULL
+)%>%
+   relocate(model)
+
+#Create a function to extract the VIFs
+extract_vif <- function(model) {
+  vif_obj <- performance::check_collinearity(model)
+  as.data.frame(vif_obj)[, c("Term", "VIF")]
+}
+
+
+A<-performance::r2(linear_males)
+as.data.frame(A)[, c("R2_conditional", "R2_marginal")]
+  
+
+library(MuMIn)
+r.squaredGLMM(linear_males)
+
 library(performance)
 
-performance(linear_males)
-check_collinearity(linear_males)
+performance::r2(linear_males)
+performance::check_collinearity(linear_males)
 performance(polygonal_males)
 check_collinearity(polygonal_males)
 
@@ -223,6 +303,8 @@ performance(linear_young)
 check_collinearity(linear_young)
 performance(polygonal_young)
 check_collinearity(polygonal_young)
+
+
 
 ```
 
