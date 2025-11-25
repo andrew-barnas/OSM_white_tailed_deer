@@ -265,7 +265,7 @@ extract_r2<-function(model){
   as.data.frame(model_fit)[, c("R2_conditional", "R2_marginal")]
 }
 
- map_df(
+ model_r2<-map_df(
   names(models),
   ~ extract_r2(models[[.x]]) %>%
     mutate(model = .x),
@@ -273,36 +273,81 @@ extract_r2<-function(model){
 )%>%
    relocate(model)
 
-#Create a function to extract the VIFs
-extract_vif <- function(model) {
-  vif_obj <- performance::check_collinearity(model)
-  as.data.frame(vif_obj)[, c("Term", "VIF")]
-}
-
-
-A<-performance::r2(linear_males)
-as.data.frame(A)[, c("R2_conditional", "R2_marginal")]
+#Write that csv
+write.csv(model_r2, file.path(output_directory, "model_r2.csv"),
+          row.names = FALSE)
   
 
-library(MuMIn)
-r.squaredGLMM(linear_males)
+#Likelihood Ratio Tests for random effects
+#This is a bit more indepth because I need to fit the same models above, just without the random effect...
+linear_males_reduced<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index,
+                 family = "binomial",
+                 data = wtd_dets)
 
-library(performance)
 
-performance::r2(linear_males)
-performance::check_collinearity(linear_males)
-performance(polygonal_males)
-check_collinearity(polygonal_males)
 
-performance(linear_females)
-check_collinearity(linear_females)
-performance(polygonal_females)
-check_collinearity(polygonal_females)
+polygonal_males_reduced<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index,
+                 family = "binomial",
+                 data = wtd_dets)
 
-performance(linear_young)
-check_collinearity(linear_young)
-performance(polygonal_young)
-check_collinearity(polygonal_young)
+
+linear_females_reduced<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index,
+                   
+                 family = "binomial",
+                 data = wtd_dets)
+
+polygonal_females_reduced<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index,
+                 family = "binomial",
+                 data = wtd_dets)
+
+
+linear_young_reduced<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index,
+                 family = "binomial",
+                 data = wtd_dets)
+
+
+polygonal_young_reduced<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index,
+                 family = "binomial",
+                 data = wtd_dets)
+
+
+
 
 
 
