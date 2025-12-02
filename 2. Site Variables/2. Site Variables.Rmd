@@ -76,6 +76,12 @@ habitat_pca <- prcomp(habitat %>%
 summary(habitat_pca)
 # Loadings (how variables contribute to PCs), basically as we move from each component how do habitats change?
 habitat_pca$rotation
+
+#Save that as a dataframe and export it
+write.csv(data.frame(habitat_pca$rotation),
+          file.path(output_directory, "PCA_results.csv"),
+          row.names = TRUE)
+
 #E.g. PC1 broadleaf = 0.55, strong positive contribution, coniferous = -0.69 strong negative contribution
 #PC1 represents a gradient between broadleaf and coniferous cover --> high PC1 more broadleaf less coniferous, low PC1 more coniferous, less broadleaf
 #PC2 gradient from mixed to shrubby
@@ -99,7 +105,7 @@ ggplot(habitat_pca_df, aes(x = PC1, y = PC2, color = array)) +
        x = "PC1 (coniferous to broadleaf)", y = "PC2 (mixed to shrub)")
 
 
-fviz_pca_biplot(habitat_pca,
+PCA_plot<-fviz_pca_biplot(habitat_pca,
                 axes = c(1, 2),     # use first 2 
                 label = "var",         # show variable loadings
                 habillage = habitat$array,  # color by array
@@ -107,6 +113,15 @@ fviz_pca_biplot(habitat_pca,
                 repel = TRUE,
                 geom.ind = "point") +
   ggtitle("3D PCA Biplot of Habitat Variables")
+
+#Save that figure 
+ggsave(filename = "PCA_plot.jpeg", #name
+        plot = PCA_plot,  #plot you want to save
+        path = figure_directory, #where its saved
+        width = 2000, #how wide
+        height = 2000,#how tall
+         units = "px", #units in pixels
+         bg = 'white') #make sure background is white
 
 
 #Ok lets use PC1 and PC2 for now, lets put them into the main dataframe
@@ -126,6 +141,7 @@ Alright lets continue to work on our covariate file. I am going to keep things v
 #Based off Marissas SEM results: 
 #Positive: roads, wells (active), wells (inactive), timber harvest
 #Negative: Seismic lines, 3d seismic lines, pipelines
+colnames(covs)
 
 #Lets pull those out
 covs<-covs%>%
@@ -150,16 +166,16 @@ covs<-covs%>%
 
 #Create a sum across all the columns of disturbance, this will represent an overall disturbance score!
 covs<-covs%>%
-  mutate(disturbance_index = rowSums(across(4:107)))
+  mutate(disturbance_index = rowSums(across(4:106)))
 
 #I also want to create a broad "linear" and "polygonal" sum variable. This is just a sum of the polygonal and linear sums as I read the definitions in the file.
 covs<-covs%>%
   mutate(
     linear_index = airp_runway + canal + conventional_seismic + interchange_ramp + low_impact_seismic + 
-      pipeline + ris_airp_runway + ris_road + ris_transmission_line + ris_windrow + rlwy_dbl_track + rlwy_mlt_track + rlwy_sgl_track + rlwy_spur + road_gravel_1l + road_gravel_2l + road_paved_1l + road_paved_2l + road_paved_3l + road_paved_4l + road_paved_5l + road_paved_div + road_paved_undiv_1l + road_paved_undiv_2l + road_unclassified + road_unimproved + road_unpaved_1l + road_paved_undiv_2l + road_winter + runway + trail + transmission_line + truck_trail + vegetated_edge_railways + vegetated_edge_roads
+      pipeline + ris_airp_runway + ris_road + ris_transmission_line + ris_windrow + rlwy_dbl_track + rlwy_mlt_track + rlwy_sgl_track + rlwy_spur + road_gravel_1l + road_gravel_2l + road_paved_1l + road_paved_2l + road_paved_3l + road_paved_4l + road_paved_5l + road_paved_div + road_paved_undiv_1l  + road_unclassified + road_unimproved + road_unpaved_1l + road_unpaved_2l + road_paved_undiv_2l + road_winter + runway + trail + transmission_line + truck_trail + vegetated_edge_railways + vegetated_edge_roads
     ,  
     
-    polygonal_index = borrowpit_dry + borrowpit_wet + borrowpits + camp_industrial + campground + cfo + clearing_unknown + clearing_wellpad_unconfirmed + country_residence + crop + cultivation_abandoned + dugout + facility_other + facility_unknown + fruit_vegetables + golfcourse + greenspace + grvl_sand_pit + harvest_area + harvest_area_white_zone + lagoon + landfill + rock_and_rubble + agriculture + exposed + developed + mill + mines_oilsands + mines_pitlake + misc_oil_gas_facility + oil_gas_plant + peat +  open_pit_mine + recreation + reservoir + residence_clearing + ris_borrowpits + ris_camp_industrial + ris_clearing_unknown + ris_drainage + ris_facility_operations + ris_facility_unknown + ris_mines_oilsands + ris_oilsands_rms + ris_overburden_dump + ris_plant + ris_reclaim_ready + ris_soil_replaced + ris_soil_salvaged + ris_tailing_pond + ris_tank_farm + ris_utilities + ris_waste + rough_pasture + rural_residence + tailing_pond + tame_pasture + urban_industrial + urban_residence + well_aband + well_bitumen + well_cased + well_cleared_not_confirmed + well_cleared_not_drilled + well_gas + well_oil + well_other + well_unknown
+    polygonal_index = borrowpit_dry + borrowpit_wet + borrowpits + camp_industrial + campground + cfo + clearing_unknown + clearing_wellpad_unconfirmed + country_residence + crop + cultivation_abandoned + dugout + facility_other + facility_unknown + fruit_vegetables + golfcourse + greenspace + grvl_sand_pit + harvest_area + harvest_area_white_zone + lagoon + landfill + rock_and_rubble + agriculture + exposed + developed + mill + mines_oilsands + mines_pitlake + misc_oil_gas_facility + oil_gas_plant + peat +  open_pit_mine + recreation + reservoir + residence_clearing + ris_borrowpits + ris_camp_industrial + ris_clearing_unknown + ris_drainage + ris_facility_operations + ris_facility_unknown + ris_mines_oilsands + ris_oilsands_rms + ris_overburden_dump + ris_plant + ris_reclaim_ready + ris_soil_replaced + ris_soil_salvaged + ris_tailing_pond + ris_tank_farm + ris_utilities + ris_waste + rough_pasture + rural_residence + tailing_pond + tame_pasture + urban_industrial + urban_residence + well_aband + well_bitumen + well_cased + well_cleared_not_confirmed + well_cleared_not_drilled + well_gas + well_oil + well_other + well_unknown + sump
   )
 
 #############################################
