@@ -234,15 +234,41 @@ wtd_dets<-wtd_dets%>%
 #   mutate(across(c(wtd_present, wolf_present),
 #                 ~ ifelse(is.na(.x) | .x == 0, 0, 1)))
 
+```
+
+
+```{r}
+
+
+
 #Ok, lets work with the predators for now. At this point I have independent detections of predator species. Lets pull them out, figure out how many per site by just summing across all predators
 #REMEMBER - this wont have zeros! This will get filled in later. 
 predator_index<-wtd_dets%>%
   filter(species %in% c("Black bear", "Grey wolf", "Coyote"))%>%
   #And because I just want total independent detections, I can just take the number of observations at each site/year/array --> the total over all the weeks!
- group_by(array, year, site)%>%
+ group_by(array, year, site, species)%>%
    summarise(predator_detections = n())
 
 
+#I am keeping that above, but lets do some monkeying around for plotting
+predator_index <- wtd_dets %>%
+  filter(species %in% c("Black bear", "Grey wolf", "Coyote")) %>%
+  group_by(array, year, site, species) %>%
+  summarise(predator_detections = n(), .groups = "drop") %>%
+  tidyr::pivot_wider(
+    names_from = species,
+    values_from = predator_detections,
+    values_fill = 0
+  ) %>%
+  mutate(
+    predator_detections = `Black bear` + `Grey wolf` + Coyote
+  )
+
+```
+
+
+
+```{r}
 #Ok, I want to do something slightly different here.First for deer, I think I can sum the occurrences and turn them into presence/absence
  wtd_dets<-wtd_dets%>%
    filter(species == "White-tailed deer")%>%
@@ -298,6 +324,79 @@ ggplot(wtd_dets, aes(x = array, y = deer_present / n_weeks))+
 
 
 ```
+
+Quick exploration of the predator detections! Need to formalize this later, clean it up
+```{r}
+wtd_dets<-wtd_dets%>%
+  rename(black_bear = `Black bear`,
+         wolf = `Grey wolf`,
+         coyote = Coyote)
+
+
+
+
+
+predator_long <- wtd_dets %>%
+  pivot_longer(
+    cols = c(black_bear, coyote, wolf, predator_detections),
+    names_to = "predator_type",
+    values_to = "detections"
+  ) %>%
+  mutate(
+    predator_type = recode(
+      predator_type,
+      black_bear = "Black bear",
+      coyote = "Coyote",
+      wolf = "Wolf",
+      predator_detections = "Total predators"
+    )
+  )
+
+#re-order that variable for nice plotting
+predator_long$predator_type<-factor(predator_long$predator_type,
+                                    levels = c("Black bear",
+                                               "Wolf",
+                                               "Coyote",
+                                               "Total predators"))
+
+
+ggplot(predator_long, aes(x = detections)) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~ predator_type, scales = "free_x") +
+  theme_minimal() +
+  labs(
+    x = "Independent detections",
+    y = "Frequency",
+    title = "Distributions of Predator Detections"
+  )
+
+
+#Quick predator PCA
+
+predator_pca<-wtd_dets %>%
+  dplyr::mutate(
+    across(
+      c(black_bear, wolf, coyote),
+      ~ tidyr::replace_na(.x, 0)
+    )
+  )
+predator_pca<-predator_pca%>%
+  ungroup()%>%
+  dplyr::select(black_bear, wolf, coyote)%>%
+    mutate(across(c(black_bear, wolf, coyote),
+              .fns = ~ as.numeric(scale(.x))))
+
+pred_pca<-prcomp(predator_pca, center = FALSE, scale. = FALSE)
+
+summary(pred_pca)
+pred_pca$rotation
+
+#Ok now remove those three predators from the datafarame, no longer care about them this was just exploration
+wtd_dets<-wtd_dets%>%
+  dplyr::select(-c(black_bear, wolf, coyote))
+
+```
+
 
 
 And now seperately with the previously prepared dataframe, lets work on weekly proportional binomial for the males, female deer, and female with young

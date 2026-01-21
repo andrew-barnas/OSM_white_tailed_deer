@@ -374,6 +374,17 @@ hist(wtd_dets$temp_anomaly)
 ```
 
 
+Correlations?
+```{r}
+#Give me some correlations between winter and temperature?
+cor.test(wtd_dets$mean_min_temp, wtd_dets$mean_snow)
+cor.test(wtd_dets$mean_snow_spatial, wtd_dets$mean_min_temp_spatial)
+cor.test(wtd_dets$snow_anomaly, wtd_dets$temp_anomaly)
+
+
+
+```
+
 
 Predator detections?
 ```{r}
