@@ -1,0 +1,242 @@
+Simulations baby!
+
+```{r}
+#Clear everything out and start fresh
+rm(list=ls())
+library(reproducible) #setting up directories for data management
+library(readr)        #Needed to read and merge all the csv's in the camera folder
+library(dplyr)        #data wranglin'
+library(lubridate)    #datetime manipulation
+library(tidyr)        #more data manipulation
+library(stringr)      #detecting character strings
+library(ggplot2)      #data visualization
+library(purrr)        #feline-friendly loops 
+library(corrplot)     #correlation tests
+library(performance)  #Model Validation
+library(ggeffects)    #Model predictions
+library(broom.mixed)  #Extracting model coefficients
+library(flextable)    #Formatting and writing to worddoc
+library(officer)      #Formatting and writing to wordoc
+
+
+#This just sets up files for inputs (already created, must contain your files), and outputs
+#So I am going to something sneaky here, I want to pull in the dataframe that was used for modeling (so I can get variable ranges and whatnot), but thats not the true input directory, so I am going to rename these on the fly 
+input_directory<-reproducible::checkPath(file.path(getwd(), "3. Model Selection/outputs"), create = TRUE)
+wtd_dets<-read.csv(file.path(input_directory, "final_df.csv"))
+#And then go with a new input directory to read in the models
+input_directory<-reproducible::checkPath(file.path(getwd(), "4. Models/outputs"), create = TRUE)
+output_directory<-reproducible::checkPath(file.path(getwd(), "5. Simulations/outputs"), create = TRUE)
+
+
+
+```
+
+
+```{r}
+linear_males<-readRDS(file.path(input_directory, "linear_males.rds"))
+summary(linear_males)
+
+
+#I am going to pull these into a dataframe real quick
+lm<-broom.mixed::tidy(linear_males)
+
+
+
+#Simulation parameters
+n_sites<- 40 #40 sites per array
+n_arrays<- 10 #10 arrays 
+n_obs<- 2
+n<-n_sites*n_arrays*n_obs
+
+#Create some site names
+site<-rep(1:n_sites, times = n_arrays, each = n_obs)
+array<-rep(LETTERS[1:n_arrays], each = n_sites * n_obs)
+
+df<-data.frame(array, site)
+
+#Define the array level random effect from the model
+array_sd<-lm$estimate[lm$effect == "ran_pars" & lm$term == "sd__(Intercept)"]
+array_effect<-rep(rnorm(n_arrays, mean = 0, sd = array_sd), each = n_sites*n_obs)
+
+#Still looks good - remember the array effect should be constant through array ID
+df<-data.frame(array, site, array_effect)
+
+
+#Now lets generate some site covariates. Now some of these need to stay the same between years (obs) mind you!
+#Lat, linear_index, PC1, PC2 should stay consistent among years. 
+lat<-rep(runif(n_sites*n_arrays,  min = min(wtd_dets$lat), max = max(wtd_dets$lat)), each = n_obs)
+PC1<-rep(runif(n_sites*n_arrays,  min = min(wtd_dets$PC1), max = max(wtd_dets$PC1)), each = n_obs)
+PC2<-rep(runif(n_sites*n_arrays,  min = min(wtd_dets$PC2), max = max(wtd_dets$PC2)), each = n_obs)
+linear_index<-rep(runif(n_sites*n_arrays,  min = min(wtd_dets$linear_index), max = max(wtd_dets$linear_index)), each = n_obs)
+
+#mean snow spatial is slightly different, and theoretically it should be different between years (observations), but they should be closely related. So functionally I am going to keep them same for both years of observation for each site. This negates the risk of having a very low value one year, and then randomly a very high value the next year
+mean_snow_spatial<-rep(runif(n_sites*n_arrays,  min = min(wtd_dets$mean_snow_spatial), max = max(wtd_dets$mean_snow_spatial)), each = n_obs)
+
+
+#Check your dataframe to see that its consistent
+df<-data.frame(site, array, array_effect, lat, PC1, PC2, mean_snow_spatial)
+
+#And now the other variables, these can vary among years
+snow_anomaly<-rep(runif(n_sites*n_arrays*n_obs,  min = min(wtd_dets$snow_anomaly), max = max(wtd_dets$snow_anomaly)))
+predator_index<-rep(runif(n_sites*n_arrays*n_obs,  min = min(wtd_dets$predator_index), max = max(wtd_dets$predator_index)))
+
+df<-data.frame(site, array, array_effect, lat, linear_index, PC1, PC2, mean_snow_spatial, snow_anomaly, predator_index)
+
+
+###################################
+#Now define some true parameters
+B_intercept<-lm$estimate[lm$term == "(Intercept)"]
+B_linear<-lm$estimate[lm$term == "linear_index"]
+B_PC1<-lm$estimate[lm$term == "PC1"]
+B_PC2<-lm$estimate[lm$term == "PC2"]
+B_predator<-lm$estimate[lm$term == "predator_index"]
+B_lat<-lm$estimate[lm$term == "lat"]
+B_meansnow<-lm$estimate[lm$term == "mean_snow_spatial"]
+B_snowanomaly<-lm$estimate[lm$term == "snow_anomaly"]
+B_linear_meansnow<-lm$estimate[lm$term == "linear_index:mean_snow_spatial"]
+B_linear_snowanomaly<-lm$estimate[lm$term == "linear_index:snow_anomaly"]
+
+
+
+#And now we can calculate the linear predictor
+linear_predictor<-B_intercept +
+  B_linear*df$linear_index+
+  B_PC1*df$PC1+
+  B_PC2*df$PC2+
+  B_predator*df$predator_index+
+  B_lat*df$lat+
+  B_meansnow*df$mean_snow_spatial+
+  B_snowanomaly*df$snow_anomaly+
+  B_linear_meansnow * df$linear_index * df$mean_snow_spatial +
+  B_linear_snowanomaly * df$linear_index * df$snow_anomaly +
+  df$array_effect
+
+#convert linear predictor to probabilities based on logit link funciton
+prob<-plogis(linear_predictor)
+#The number of "successes" depends on the number of trials and probability of success
+#Basing this on four months, four weeks each to be sampled
+total_trials<-16
+present<-rbinom(n, size = total_trials, prob = prob)
+#The number of failures is just the total trials minus total successes
+absent<-total_trials - present
+
+
+#Wrap it into a dataframe
+df<-data.frame(site, array, present, absent, array_effect, lat, linear_index, PC1, PC2, mean_snow_spatial, snow_anomaly, predator_index)
+
+#I need something handy to randomly select rows of data to get us down to the real sample size
+df<-df[sample(nrow(df), 701),]
+
+
+#refit the model
+linear_males2<-glmmTMB::glmmTMB(cbind(present, absent) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = df)
+#Original
+summary(linear_males)
+#Simulated
+summary(linear_males2)
+
+############################################################################################################
+#Ok lets wrap this into a function and iterate 100 times
+linear_model_simulation<-function(n_arrays = 10,
+         n_sites = 40,
+         n_obs = 2,
+         n = n_arrays*n_sites*n_obs){
+  
+#Simulation parameters
+site<-rep(1:n_sites, times = n_arrays, each = n_obs)
+array<-rep(LETTERS[1:n_arrays], each = n_sites * n_obs)
+array_sd<-lm$estimate[lm$effect == "ran_pars" & lm$term == "sd__(Intercept)"]
+array_effect<-rep(rnorm(n_arrays, mean = 0, sd = array_sd), each = n_sites*n_obs)
+#Simulated data - constant per site
+lat<-rep(runif(n_sites*n_arrays,  min = min(wtd_dets$lat), max = max(wtd_dets$lat)), each = n_obs)
+PC1<-rep(runif(n_sites*n_arrays,  min = min(wtd_dets$PC1), max = max(wtd_dets$PC1)), each = n_obs)
+PC2<-rep(runif(n_sites*n_arrays,  min = min(wtd_dets$PC2), max = max(wtd_dets$PC2)), each = n_obs)
+linear_index<-rep(runif(n_sites*n_arrays,  min = min(wtd_dets$linear_index), max = max(wtd_dets$linear_index)), each = n_obs)
+mean_snow_spatial<-rep(runif(n_sites*n_arrays,  min = min(wtd_dets$mean_snow_spatial), max = max(wtd_dets$mean_snow_spatial)), each = n_obs)
+#Simulated data - variable per year
+snow_anomaly<-rep(runif(n_sites*n_arrays*n_obs,  min = min(wtd_dets$snow_anomaly), max = max(wtd_dets$snow_anomaly)))
+predator_index<-rep(runif(n_sites*n_arrays*n_obs,  min = min(wtd_dets$predator_index), max = max(wtd_dets$predator_index)))
+###################################
+#Model Parameters
+B_intercept<-lm$estimate[lm$term == "(Intercept)"]
+B_linear<-lm$estimate[lm$term == "linear_index"]
+B_PC1<-lm$estimate[lm$term == "PC1"]
+B_PC2<-lm$estimate[lm$term == "PC2"]
+B_predator<-lm$estimate[lm$term == "predator_index"]
+B_lat<-lm$estimate[lm$term == "lat"]
+B_meansnow<-lm$estimate[lm$term == "mean_snow_spatial"]
+B_snowanomaly<-lm$estimate[lm$term == "snow_anomaly"]
+B_linear_meansnow<-lm$estimate[lm$term == "linear_index:mean_snow_spatial"]
+B_linear_snowanomaly<-lm$estimate[lm$term == "linear_index:snow_anomaly"]
+#Linear predictor calculations
+linear_predictor<-B_intercept +
+  B_linear*df$linear_index+
+  B_PC1*df$PC1+
+  B_PC2*df$PC2+
+  B_predator*df$predator_index+
+  B_lat*df$lat+
+  B_meansnow*df$mean_snow_spatial+
+  B_snowanomaly*df$snow_anomaly+
+  B_linear_meansnow * df$linear_index * df$mean_snow_spatial +
+  B_linear_snowanomaly * df$linear_index * df$snow_anomaly +
+  df$array_effect
+prob<-plogis(linear_predictor)
+total_trials<-16
+present<-rbinom(n, size = total_trials, prob = prob)
+absent<-total_trials - present
+
+#Wrap it into a dataframe
+df<-data.frame(site, array, present, absent, array_effect, lat, linear_index, PC1, PC2, mean_snow_spatial, snow_anomaly, predator_index)
+
+#Randomly reduce to real sample size
+df<-df[sample(nrow(df), 701),]
+
+#refit the model
+m1<-glmmTMB::glmmTMB(cbind(present, absent) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = df)
+  
+return(m1)
+
+}
+############################################
+#Ok lets run that function a few times
+set.seed(420)
+n_sims<- 100
+start_time<-Sys.time()
+simple_model_selection_sims<-map(1:n_sims, ~linear_model_simulation())
+end_time<-Sys.time()
+run_time<-as.numeric(difftime(end_time, start_time), units = "mins")
+print(paste("Simulations complete in ", round(run_time), " minutes"))
+
+#Extract model estimates
+param_estimates <- map_df(
+  simple_model_selection_sims,
+  ~ tidy(.x, effects = "fixed", component = "cond"),
+  .id = "simulation"
+)
+
+#And now for the plots....
+ggplot(param_estimates%>%
+         filter(term == "PC1"),
+       aes(x = estimate)) +
+  geom_histogram(bins = 30, color = "black", fill = "grey70")
+
+
+```

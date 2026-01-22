@@ -111,6 +111,10 @@ polygonal_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
                  data = wtd_dets)
 summary(polygonal_young)
 
+#Lets save those six models to the output directory, we will need them for the next steps of simulation
+saveRDS(linear_males, file = file.path(output_directory, "linear_males.rds"))
+
+
 
 #Alright now that we have our six models, can we extract model coefficients in an efficient way?
 models<-list(
@@ -1125,8 +1129,6 @@ ggsave(filename = "young_models.jpeg", #name
 
 
 ```
-
-
 
 
 
