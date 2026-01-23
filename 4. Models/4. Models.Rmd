@@ -113,7 +113,11 @@ summary(polygonal_young)
 
 #Lets save those six models to the output directory, we will need them for the next steps of simulation
 saveRDS(linear_males, file = file.path(output_directory, "linear_males.rds"))
-
+saveRDS(linear_females, file = file.path(output_directory, "linear_females.rds"))
+saveRDS(linear_young, file = file.path(output_directory, "linear_young.rds"))
+saveRDS(polygonal_males, file = file.path(output_directory, "polygonal_males.rds"))
+saveRDS(polygonal_females, file = file.path(output_directory, "polygonal_females.rds"))
+saveRDS(polygonal_young, file = file.path(output_directory, "polygonal_young.rds"))
 
 
 #Alright now that we have our six models, can we extract model coefficients in an efficient way?
