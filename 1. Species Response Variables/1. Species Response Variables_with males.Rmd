@@ -37,6 +37,86 @@ weather_10<-read.csv("C:/Users/16043/Desktop/OSM white tailed deer/daymet_weathe
 ```
 
 
+One thing I am going to do here real quick is calculate a camera operability matrix for the whole dataframe. This just demonstrates when and where cameras were operating. Doing this here as the dataframe is still clean and intact!
+```{r}
+
+#Defining the colours to use
+okabe_ito <- c(
+  "#E69F00", # orange
+  "#56B4E9", # sky blue
+  "#009E73", # bluish green
+  "#F0E442", # yellow
+  "#0072B2", # blue
+  "#D55E00", # vermillion
+#  "#CC79A7", # reddish purple
+  "#999999", # grey
+  "#A6761D", # brown
+#  "#1B9E77", # teal green
+  "#7570B3", # violet
+  "#E7298A"  # pinkish magenta
+)
+
+#This is the same figure from the OSM data paper, going to modify it slightly to avoid the stupid charge of "self plagarism"...we used to be a society. Changed up the colours slightly
+
+shade_df <- tibble(
+  xmin = as.Date(c("2021-06-01", "2022-06-01", "2023-06-01", "2024-06-01")),
+  xmax = as.Date(c("2021-09-30", "2022-09-30", "2023-09-30", "2024-09-30"))
+)
+
+camera_operability_matrix<-dets%>%
+  mutate(date = as_date(ymd_hms(datetime)))%>%
+  #Only keep the distinct combos (this will speed up the plot, sort of)
+  distinct(array, site, date)%>%
+  #And now the actual plot
+  ggplot(aes(x = date, y = site, color = array))+
+  geom_rect(
+    data = shade_df,
+    aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf),
+    inherit.aes = FALSE,
+    fill = "grey90",
+    alpha = 0.5)+
+  geom_point(size = 0.5)+ #One point per row (day) (not a segment as was previously done)
+  scale_x_date(
+    date_labels = "%b %Y",
+    limits = c(as.Date("2021-06-01"), as.Date("2024-10-01")),
+    breaks = c(as.Date("2021-07-01"), as.Date("2022-01-01"),
+               as.Date("2022-06-01"), as.Date("2023-01-01"),
+               as.Date("2023-06-01"), as.Date("2024-01-01"), as.Date("2024-06-01")))+
+  theme_classic()+
+  ylab("Site ID n = (430)")+
+  xlab("Date")+
+  labs(color = "Landscape\nUnit")+
+  scale_color_manual(values = okabe_ito)+
+  theme(axis.text.y = element_blank(),
+        axis.title = element_text(size = 14),
+        axis.text.x = element_text(size = 10), 
+        legend.key.size = unit(10, "mm"),
+        legend.title = element_text(size = 20),
+        legend.text = element_text(size = 15))+
+   guides(
+    color = guide_legend(override.aes = list(size = 5))  # makes the legend point symbols bigger
+  )
+
+camera_operability_matrix<-camera_operability_matrix+
+  geom_vline(xintercept = c(as.Date("2021-06-01"), as.Date("2021-09-30"),
+                            as.Date("2022-06-01"), as.Date("2022-09-30"),
+                            as.Date("2023-06-01"), as.Date("2023-09-30"),
+                            as.Date("2024-06-01"), as.Date("2024-09-30")),
+             linetype = "dashed")
+
+#Save that figure!
+ggsave(filename = "camera_operability_matrix.jpeg", #name
+        plot = camera_operability_matrix,  #plot you want to save
+        path = figure_directory, #where its saved
+        width =4000, #how wide
+        height = 3000,#how tall
+         units = "px", #units in pixels
+         bg = 'white') #make sure background is white
+
+```
+
+
+
 First, we need to calculate independent detections of deer and predator species of interest
 ```{r}
 

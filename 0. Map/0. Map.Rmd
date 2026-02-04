@@ -54,7 +54,7 @@ Create the actual map, this involves a bit of processing of the data, and then c
 
 main_plot<-ggplot() +
   # Polygon layer with manual fill
-  geom_sf(data = lu_polygons, aes(fill = "Monitoring Areas"), color = "black", linewidth = 0.5) +
+  geom_sf(data = lu_polygons, aes(fill = "Landscape Units"), color = "black", linewidth = 0.5) +
   
   # Point layer with manual color (we'll treat it as "fill" for legend merging)
   geom_sf(data = cam_sf, aes(fill = "Camera Sites"), color = "gray18", shape =16, size = 0.2) +
@@ -63,7 +63,7 @@ main_plot<-ggplot() +
   scale_fill_manual(
     name = "Legend",
     values = c(
-      "Monitoring Areas" = "darkseagreen",
+      "Landscape Units" = "darkseagreen",
       "Camera Sites" = "gray18"
     )
   ) +
@@ -146,5 +146,13 @@ map<-ggdraw() +
   
 #Exporting this figure seems to be a nightmare, it moves all the elements around....so out of laziness I am just going to copy and paste. If any students see this, do as I say, not as I do.
 
+
+```
+
+
+One other thing I need is a quick calculation on the landscape unit areas
+```{r}
+
+#Put code here
 
 ```
