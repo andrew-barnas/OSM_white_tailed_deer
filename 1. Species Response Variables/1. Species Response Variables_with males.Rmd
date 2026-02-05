@@ -37,6 +37,7 @@ weather_10<-read.csv("C:/Users/16043/Desktop/OSM white tailed deer/daymet_weathe
 ```
 
 
+
 One thing I am going to do here real quick is calculate a camera operability matrix for the whole dataframe. This just demonstrates when and where cameras were operating. Doing this here as the dataframe is still clean and intact!
 ```{r}
 
@@ -139,7 +140,7 @@ wtd<-wtd%>%
 
 #Set up the framework for assigning unique IDs
 wtd$Event.ID<-9999 #This is just an arbitrary event identification code
-mins<-2 # THIS IS THE DETECTION EVENT BREAK-POINT YOU CAN CHANGE
+mins<-30 # THIS IS THE DETECTION EVENT BREAK-POINT YOU CAN CHANGE
 seq <- as.numeric(paste0(nrow(wtd),0))
 seq <- round(seq,-(nchar(seq)))
 
@@ -162,6 +163,11 @@ if(wtd$duration[nrow(wtd)] < mins|
 }
 
 browseURL("https://www.youtube.com/watch?v=wOFVrjL-XBM")
+
+```
+
+Cleaning up the independent detections. 
+```{r}
 
 #Ok I am going to do two things here. Calculate the independent detections of deer and other species normally, but I am going to set aside a dataframe that will just be used for deer demographics. Because there are lots of little things that need to be done for this
 
@@ -214,11 +220,11 @@ wtd%>%
   xlab("Month")
 
 
-#Lets create a figure of just white-tailed deer detections throughout the year - this will be a supplementary figure for the manuscript
+#Lets create a figure of detections per month for each species. This will be a supplemental figure. 
 
 
 detections_per_month<-wtd %>%
-  filter(species == "White-tailed deer") %>%
+ # filter(species == "White-tailed deer") %>%
   mutate(
     month_num = month(datetime),
     #Adding a variable to colour code the months we are using
@@ -226,10 +232,11 @@ detections_per_month<-wtd %>%
     month = factor(month_num, levels = 1:12, labels = month.abb),
     highlight = ifelse(month_num %in% 6:9, "summer", "other")   # Jun–Sep = red
   ) %>%
-  group_by(month, highlight) %>%
+  group_by(species, month, highlight) %>%
   summarise(n_obs = n()) %>%
   #And now feed it into a ggplot
   ggplot(aes(x = month, y = n_obs, fill = highlight)) +
+   facet_wrap(~species)+
   geom_bar(stat = "identity") +
   scale_fill_manual(values = c("summer" = "red", "other" = "grey70")) +
   labs(
@@ -244,7 +251,7 @@ ggsave(filename = "detections_per_month.jpeg", #name
         plot = detections_per_month,  #plot you want to save
         path = figure_directory, #where its saved
         width =3000, #how wide
-        height = 1500,#how tall
+        height = 2000,#how tall
          units = "px", #units in pixels
          bg = 'white') #make sure background is white
 
@@ -344,6 +351,8 @@ predator_index <- wtd_dets %>%
     predator_detections = `Black bear` + `Grey wolf` + Coyote
   )
 
+
+
 ```
 
 
@@ -411,9 +420,6 @@ wtd_dets<-wtd_dets%>%
   rename(black_bear = `Black bear`,
          wolf = `Grey wolf`,
          coyote = Coyote)
-
-
-
 
 
 predator_long <- wtd_dets %>%
@@ -598,43 +604,5 @@ write.csv(wtd_dets,file.path(output_directory, "weekly_proportional_binomial_wit
          row.names = FALSE)
 ```
 
-Response Variable Plot
-```{r}
-
-wtd_long<-wtd_dets %>%
-  #First lets make our new columns to plot the actual proportion
-  mutate(
-    prop_males   = n_male / n_weeks,
-    prop_females = n_female / n_weeks,
-    prop_young   = n_young / n_weeks
-  ) %>%
-  #Clean up, dataframe 2 messy 4 me
-  dplyr::select(array, year, site, prop_males, prop_females, prop_young) %>%
-  tidyr::pivot_longer(
-    cols = c(prop_males, prop_females, prop_young),
-    names_to = "group",
-    values_to = "proportion"
-  )
-  
-#Build, save, and export the figure
-response_variable_figure<-ggplot(wtd_long, aes(x = array, y = proportion, fill = group)) +
-  geom_boxplot(position = position_dodge(width = 0.8)) +
-  scale_fill_brewer(palette = "Set2",
-                    labels = c("Males", " Lone Females", "Females With\nYoung")) +
-  labs(
-    x = "Array",
-    y = "Proportion of Weeks With Detections",
-    fill = "Group"
-  ) +
-  theme_classic(base_size = 14)
 
 
-ggsave(filename = "response_variable_figure.jpeg", #name
-        plot = response_variable_figure,  #plot you want to save
-        path = figure_directory, #where its saved
-        width =3000, #how wide
-        height = 1500,#how tall
-         units = "px", #units in pixels
-         bg = 'white') #make sure background is white
-
-```
