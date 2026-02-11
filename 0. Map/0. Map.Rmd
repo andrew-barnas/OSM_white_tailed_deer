@@ -46,6 +46,25 @@ lu_polygons <- lu_polygons %>%
   filter(!(NameRefere %in% c("LU8", "LU4")))
 ```
 
+Quick summary statistics on the landscape units, need this for the manuscript!
+```{r}
+#Extract area and wrap it into a dataframe
+area<-data.frame(
+  NameRefere = lu_polygons$NameRefere
+)
+
+area$area<-as.numeric(round((sf::st_area(lu_polygons)/1e6), digits = 1))
+
+#And now summary
+area%>%
+  summarise(mean_area = mean(area),
+            sd_area = sd(area),
+            min_area = min(area),
+            max_area = max(area))
+
+```
+
+
 
 Create the actual map, this involves a bit of processing of the data, and then carefully layering elements onto it before saving
 ```{r}

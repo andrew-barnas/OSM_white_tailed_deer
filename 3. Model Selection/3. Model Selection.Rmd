@@ -90,7 +90,45 @@ write.csv(wtd_dets, file.path(output_directory, "final_df.csv"), row.names = FAL
 ```
 
 
+Doing some quick summary stuff for camera operation here. No longer including the model seleciton stuff but I am keeping it for now in case I return to it
+```{r}
+n_distinct(wtd_dets$site)
 
+#how many total survey weeks? That should just be the sum of n_weeks across the frame right?
+wtd_dets%>%
+  summarise(total_weeks = sum(n_weeks),
+            mean_weeks = mean(n_weeks),
+            sd_weeks = sd(n_weeks),
+            min_weeks = min(n_weeks),
+            max_weeks = max(n_weeks))
+
+
+
+
+#Information on site occupancy
+ wtd_dets %>%
+  group_by(site) %>%
+  summarise(
+    male_present   = any(n_male   > 0, na.rm = TRUE),
+    female_present = any(n_female > 0, na.rm = TRUE),
+    young_present  = any(n_young  > 0, na.rm = TRUE),
+    .groups = "drop"
+  )%>%
+   summarise(
+    n_sites = n(),
+    males   = sum(male_present),
+    females = sum(female_present),
+    young   = sum(young_present)
+  )%>%
+  mutate(
+    males_prop   = males   / n_sites,
+    females_prop = females / n_sites,
+    young_prop   = young   / n_sites
+  )
+
+
+
+```
 
 
 

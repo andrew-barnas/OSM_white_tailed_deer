@@ -46,11 +46,10 @@ linear_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
                    lat+
                      mean_snow_spatial*linear_index+
                    snow_anomaly*linear_index+
-                   (1|site),
+                   (1|array),
                  family = "binomial",
                  data = wtd_dets)
 summary(linear_males)
-
 
 polygonal_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
                    polygonal_index+
@@ -59,7 +58,7 @@ polygonal_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
                    lat+
                      mean_snow_spatial*polygonal_index+
                    snow_anomaly*polygonal_index+
-                   (1|site),
+                   (1|array),
                  family = "binomial",
                  data = wtd_dets)
 summary(polygonal_males)
@@ -71,7 +70,7 @@ linear_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
                    lat+
                      mean_snow_spatial*linear_index+
                    snow_anomaly*linear_index+
-                   (1|site),
+                   (1|array),
                  family = "binomial",
                  data = wtd_dets)
 summary(linear_females)
@@ -83,7 +82,7 @@ polygonal_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
                    lat+
                      mean_snow_spatial*polygonal_index+
                    snow_anomaly*polygonal_index+
-                   (1|site),
+                   (1|array),
                  family = "binomial",
                  data = wtd_dets)
 summary(polygonal_females)
@@ -95,7 +94,7 @@ linear_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
                    lat+
                      mean_snow_spatial*linear_index+
                    snow_anomaly*linear_index+
-                   (1|site),
+                   (1|array),
                  family = "binomial",
                  data = wtd_dets)
 summary(linear_young)
@@ -107,7 +106,7 @@ polygonal_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
                    lat+
                      mean_snow_spatial*polygonal_index+
                    snow_anomaly*polygonal_index+
-                   (1|site),
+                   (1|array),
                  family = "binomial",
                  data = wtd_dets)
 summary(polygonal_young)
@@ -147,21 +146,18 @@ df<-purrr::imap_dfr(models, ~{
   
 })
 
-#Recode those couple terms
-df <- df %>%
-  mutate(term = dplyr::case_when(
-    term == "(Intercept)"      ~ "Intercept",
-    group == "array" ~ "Array ID",
-    group == "site" ~ "Site ID",
-    TRUE ~ term
-  ))
-
 #Lets clean this up a little bit 
 df<-df%>%
   dplyr::select(term, estimate, std.error, p.value, model_name)%>%
   relocate(model_name)
 
-
+#Recode those couple terms
+df <- df %>%
+  mutate(term = dplyr::case_when(
+    term == "(Intercept)"      ~ "Intercept",
+    term == "sd__(Intercept)"  ~ "Array ID",
+    TRUE ~ term
+  ))
 
 #Quick funciton to format P values
 format_p <- function(p) {
@@ -195,7 +191,7 @@ df_wide <- df %>%
 
 #And now, re-order values and arrange!
 df_wide$term<-factor(df_wide$term, 
-                     levels = c("Intercept", "PC1", "PC2", "predator_index", "lat", "mean_snow_spatial", "snow_anomaly", "linear_index","linear_index:mean_snow_spatial", "linear_index:snow_anomaly", "polygonal_index", "polygonal_index:mean_snow_spatial", "polygonal_index:snow_anomaly", "Site ID"))
+                     levels = c("Intercept", "PC1", "PC2", "predator_index", "lat", "mean_snow_spatial", "snow_anomaly", "linear_index","linear_index:mean_snow_spatial", "linear_index:snow_anomaly", "polygonal_index", "polygonal_index:mean_snow_spatial", "polygonal_index:snow_anomaly", "Array ID"))
 
 df_wide<-df_wide%>%
   arrange(term)
@@ -265,7 +261,7 @@ doc <- flextable::body_add_flextable(doc, ft)
 
 #Now actually write the file
 #NOTE - this table is quite big so you'll have to modify it into landscape style manually
-#I tried to do it in the code, but got lost in the sauce
+#I tried to do it in the code, but got lost
 print(doc, target = file.path(output_directory, "variance_inflation_factors.docx"))
 
 #########################################################################################
@@ -393,20 +389,18 @@ write.csv(lrt_results, file.path(output_directory, "lrt_results.csv"),
           row.names = FALSE)
 ```
 
-
 Should we explore spatial autocorrelation?
 ```{r}
 
-#Later
+
 
 
 ```
 
 
 
-####################################
-#MODEL PREDICTIONS
-####################################
+
+Ok everything has been prepared for modeling, so I guess I can just get to it. So a few things to do for each demographic group. Fit the linear and the polygonal model, report the coefficients, get the model predictions, run the diagnostics. Wondering if the diagnostics should maybe be in another script but we will see 
 
 This is a silly little chunk, but I need to define the linear and polygonal lower and upper quantiles that we will make model predictions for. Rather than randomly do this in one of the chunks, I am just doing it here (only need to do it once since the values to predict for are all the same!)
 ```{r}
@@ -444,8 +438,8 @@ snow_anomaly_sd<-sd(temp_data$snow_anomaly)
 rm(temp_data)
 
 male_axis_limits<-c(0, 0.40)
-female_axis_limits<-c(0, 0.30)
-young_axis_limits<-c(0, 0.11)
+female_axis_limits<-c(0, 0.40)
+young_axis_limits<-c(0, 0.35)
 
 ```
 
@@ -458,6 +452,16 @@ Males
 
 
 #Linear model
+linear_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
 summary(linear_males)
 
 #Make predictions from that model
@@ -477,8 +481,7 @@ preds_lms<- preds_lms %>%
 # Ensure your quantile variable has correct labels
 preds_lms$linear_quantile_label <- dplyr::recode(preds_lms$linear_quantile,
                                                 "-1.13"  = "10%",
-                                                "1.06" = "90%")
-
+                                                "1.04" = "90%")
 #And then the actual plot
 linear_male_snow<-ggplot(preds_lms, aes(x = snow_spatial_unscaled,
                      y = predicted,
@@ -516,7 +519,7 @@ hist(preds_lma$snow_anomaly_unscaled)
 # Ensure your quantile variable has correct labels
 preds_lma$linear_quantile_label <- dplyr::recode(preds_lma$linear_quantile,
                                                 "-1.13"  = "10%",
-                                                "1.06" = "90%")
+                                                "1.04" = "90%")
 #And then the actual plot
 linear_male_anomaly<-ggplot(preds_lma, aes(x = snow_anomaly_unscaled,
                      y = predicted,
@@ -539,6 +542,16 @@ linear_male_anomaly<-ggplot(preds_lma, aes(x = snow_anomaly_unscaled,
 ########################################################################################
 ########################################################################################
 #Polygonal model and predictions
+polygonal_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
 summary(polygonal_males)
 
 
@@ -559,8 +572,8 @@ hist(preds_pms$snow_spatial_unscaled)
 
 # Ensure your quantile variable has correct labels
 preds_pms$polygonal_quantile_label <- dplyr::recode(preds_pms$polygonal_quantile,
-                                                "-0.94"  = "10%",
-                                                "1.41" = "90%")
+                                                "-0.93"  = "10%",
+                                                "1.39" = "90%")
 #And then the actual plot
 polygonal_male_snow<-ggplot(preds_pms, aes(x = snow_spatial_unscaled,
                      y = predicted,
@@ -600,8 +613,8 @@ hist(preds_pma$snow_anomaly_unscaled)
 
 # Ensure your quantile variable has correct labels
 preds_pma$polygonal_quantile_label <- dplyr::recode(preds_pma$polygonal_quantile,
-                                                "-0.94"  = "10%",
-                                                "1.41" = "90%")
+                                                "-0.93"  = "10%",
+                                                "1.39" = "90%")
 #And then the actual plot
 polygonal_male_anomaly<-ggplot(preds_pma, aes(x = snow_anomaly_unscaled,
                      y = predicted,
@@ -627,6 +640,16 @@ Females
 
 
 #Linear model
+linear_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
 summary(linear_females)
 
 #Make predictions from that model
@@ -646,7 +669,7 @@ preds_lfs<- preds_lfs %>%
 # Ensure your quantile variable has correct labels
 preds_lfs$linear_quantile_label <- dplyr::recode(preds_lfs$linear_quantile,
                                                 "-1.13"  = "10%",
-                                                "1.06" = "90%")
+                                                "1.04" = "90%")
 #And then the actual plot
 linear_female_snow<-ggplot(preds_lfs, aes(x = snow_spatial_unscaled,
                      y = predicted,
@@ -684,7 +707,7 @@ hist(preds_lfa$snow_anomaly_unscaled)
 # Ensure your quantile variable has correct labels
 preds_lfa$linear_quantile_label <- dplyr::recode(preds_lfa$linear_quantile,
                                                 "-1.13"  = "10%",
-                                                "1.06" = "90%")
+                                                "1.04" = "90%")
 #And then the actual plot
 linear_female_anomaly<-ggplot(preds_lfa, aes(x = snow_anomaly_unscaled,
                      y = predicted,
@@ -707,6 +730,16 @@ linear_female_anomaly<-ggplot(preds_lfa, aes(x = snow_anomaly_unscaled,
 ########################################################################################
 ########################################################################################
 #Polygonal model and predictions
+polygonal_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
 summary(polygonal_females)
 
 
@@ -727,8 +760,8 @@ hist(preds_pfs$snow_spatial_unscaled)
 
 # Ensure your quantile variable has correct labels
 preds_pfs$polygonal_quantile_label <- dplyr::recode(preds_pfs$polygonal_quantile,
-                                                "-0.94"  = "10%",
-                                                "1.41" = "90%")
+                                                "-0.93"  = "10%",
+                                                "1.39" = "90%")
 #And then the actual plot
 polygonal_female_snow<-ggplot(preds_pfs, aes(x = snow_spatial_unscaled,
                      y = predicted,
@@ -768,8 +801,8 @@ hist(preds_pfa$snow_anomaly_unscaled)
 
 # Ensure your quantile variable has correct labels
 preds_pfa$polygonal_quantile_label <- dplyr::recode(preds_pfa$polygonal_quantile,
-                                                "-0.94"  = "10%",
-                                                "1.41" = "90%")
+                                                "-0.93"  = "10%",
+                                                "1.39" = "90%")
 #And then the actual plot
 polygonal_female_anomaly<-ggplot(preds_pfa, aes(x = snow_anomaly_unscaled,
                      y = predicted,
@@ -798,6 +831,16 @@ Young
 
 
 #Linear model
+linear_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
 summary(linear_young)
 
 #Make predictions from that model
@@ -817,7 +860,7 @@ preds_lys<- preds_lys %>%
 # Ensure your quantile variable has correct labels
 preds_lys$linear_quantile_label <- dplyr::recode(preds_lys$linear_quantile,
                                                 "-1.13"  = "10%",
-                                                "1.06" = "90%")
+                                                "1.04" = "90%")
 #And then the actual plot
 linear_young_snow<-ggplot(preds_lys, aes(x = snow_spatial_unscaled,
                      y = predicted,
@@ -855,7 +898,7 @@ hist(preds_lya$snow_anomaly_unscaled)
 # Ensure your quantile variable has correct labels
 preds_lya$linear_quantile_label <- dplyr::recode(preds_lya$linear_quantile,
                                                 "-1.13"  = "10%",
-                                                "1.06" = "90%")
+                                                "1.04" = "90%")
 #And then the actual plot
 linear_young_anomaly<-ggplot(preds_lya, aes(x = snow_anomaly_unscaled,
                      y = predicted,
@@ -878,7 +921,16 @@ linear_young_anomaly<-ggplot(preds_lya, aes(x = snow_anomaly_unscaled,
 ########################################################################################
 ########################################################################################
 #Polygonal model and predictions
-
+polygonal_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
 summary(polygonal_young)
 
 
@@ -899,8 +951,8 @@ hist(preds_pys$snow_spatial_unscaled)
 
 # Ensure your quantile variable has correct labels
 preds_pys$polygonal_quantile_label <- dplyr::recode(preds_pys$polygonal_quantile,
-                                                "-0.94"  = "10%",
-                                                "1.41" = "90%")
+                                                "-0.93"  = "10%",
+                                                "1.39" = "90%")
 #And then the actual plot
 polygonal_young_snow<-ggplot(preds_pys, aes(x = snow_spatial_unscaled,
                      y = predicted,
@@ -940,8 +992,8 @@ hist(preds_pya$snow_anomaly_unscaled)
 
 # Ensure your quantile variable has correct labels
 preds_pya$polygonal_quantile_label <- dplyr::recode(preds_pya$polygonal_quantile,
-                                                "-0.94"  = "10%",
-                                                "1.41" = "90%")
+                                                "-0.93"  = "10%",
+                                                "1.39" = "90%")
 #And then the actual plot
 polygonal_young_anomaly<-ggplot(preds_pya, aes(x = snow_anomaly_unscaled,
                      y = predicted,
@@ -1083,296 +1135,437 @@ ggsave(filename = "young_models.jpeg", #name
 ```
 
 
-###################################################################################################################################
-###################################################################################################################################
-This is going to be a bit of a long section, but I want to produce the main effect figures for each of the models as supplemental figures
+
+#####################################################################################
 
 
-
+Now for males
 ```{r}
-#Reminder of which models we are talking about
-summary(linear_males)
-summary(linear_females)
-summary(linear_young)
+
+#Global model - note that overall disturbance and polygonal disturbance are highly correlated....
+global_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                     polygonal_index+
+                     linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                   mean_snow_spatial+
+                   snow_anomaly+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(global_males)
+
+#What about a "null" model that doesn't include disturbance?
+null_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   #  polygonal_index+
+                  #   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                   mean_snow_spatial+
+                   snow_anomaly+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(null_males)
+
+
+
+#All disturbance
+# disturbance_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+#                    disturbance_index+
+#                    PC1 + PC2 + #Habitat covariates
+#                    predator_index + #Predator index
+#                    lat+
+#                    mean_snow_spatial*disturbance_index+
+#                    snow_anomaly*disturbance_index+
+#                    (1|array),
+#                  family = "binomial",
+#                  data = wtd_dets)
+# summary(disturbance_males)
+
+#Polygonal -THIS IS THE TOP MODEL FOR ALL DEER
+polygonal_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
 summary(polygonal_males)
-summary(polygonal_females)
-summary(polygonal_young)
 
-#First, we need to bring in the mean and sd for each value so we can back transform, will do this as before
-temp_data<-read.csv(file.path(getwd(), "2. Site Variables/outputs/final_df.csv"))
 
-#Store the variable information in a list of lists, this will let us back transform and apply x axis labels
-var_info <- list(
-  snow_anomaly = list(
-    mean = mean(temp_data$snow_anomaly),
-    sd   = sd(temp_data$snow_anomaly),
-    xlab = "Snow Anomaly\nSnow-Water Equivalent (kg/m²)"
-  ),
-  mean_snow_spatial = list(
-    mean = mean(temp_data$mean_snow_spatial),
-    sd   = sd(temp_data$mean_snow_spatial),
-    xlab = "Mean Winter Snow\nSnow-Water Equivalent (kg/m²)"
-  ),
-  polygonal_index = list(
-    mean = mean(temp_data$polygonal_index),
-    sd   = sd(temp_data$polygonal_index),
-    xlab = "Polygonal Disturbance\nIndex"
-  ),
-  linear_index = list(
-    mean = mean(temp_data$linear_index),
-    sd   = sd(temp_data$linear_index),
-    xlab = "Linear Disturbance\nIndex"
-  ),
-  predator_index = list(
-    mean = mean(temp_data$predator_index),
-    sd   = sd(temp_data$predator_index),
-    xlab = "Predator Index"
-  ),
-  lat = list(
-    mean = mean(temp_data$lat),
-    sd   = sd(temp_data$lat),
-    xlab = "Latitude"
-  ),
-  PC1 = list(
-    mean = mean(temp_data$PC1),
-    sd   = sd(temp_data$PC2),
-    xlab = "PC1"
-  ),
-  PC2= list(
-    mean = mean(temp_data$PC2),
-    sd   = sd(temp_data$PC2),
-    xlab = "PC2"
-  )
-)
-rm(temp_data)
+#Linear
+linear_males<-glmmTMB::glmmTMB(cbind(n_male, (n_weeks - n_male)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                     mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(linear_males)
 
 
 
+#Model selection and cleanup into a nice dataframe!
+model_selection_male<- as.data.frame(model.sel(global_males, null_males, linear_males, polygonal_males,
+              rank = "AICc"))
 
-#A big old funciton to make plots based on the variable info above. Basically this takes each of those variables, figures out how to unscale it based on the original data, and provides a label for plotting
-make_prediction_plot <- function(model,
-                                 focal_var,
-                                 var_info,
-                                 ylab_text = "Predicted Probability of\nWeekly Occurrence ± 95% CI",
-                                 ylim_vals = NULL) {
-  
-  # Generate predictions
-  preds <- data.frame(
-    ggeffects::ggpredict(
-      model,
-      terms = paste0(focal_var, " [all]"),
-      type = "fixed"
-    )
-  ) %>%
-    dplyr::rename(!!focal_var := x) %>%
-    
-    # Back-transform
-    dplyr::mutate(
-      focal_unscaled =
-        .data[[focal_var]] *
-        var_info[[focal_var]]$sd +
-        var_info[[focal_var]]$mean
-    )
-  
-  # Build plot
-  p <- ggplot(preds,
-              aes(x = focal_unscaled,
-                  y = predicted)) +
-    geom_line(size = 1.2) +
-    geom_ribbon(aes(ymin = conf.low,
-                    ymax = conf.high),
-                alpha = 0.15) +
-    ylab(ylab_text) +
-    xlab(var_info[[focal_var]]$xlab) +
-    theme_classic(base_size = 15)
-  
-  if (!is.null(ylim_vals)) {
-    p <- p + ylim(ylim_vals)
-  }
-  
-  return(p)
-}
+model_selection_male<-model_selection_male%>%
+  # Add model names as a column
+  mutate(model = rownames(model_selection_male)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
 
-#I will do this seperately for the linear and polygonal models to control what is being predicted for
-#Rip through everything
-model_list <- list(
-  males = polygonal_males,
-  females = polygonal_females,
-  young = polygonal_young
-)
+rownames(model_selection_male)<-NULL
 
 
-predictors <- c("polygonal_index",
-                "PC1",
-                "PC2",
-                "predator_index",
-                "lat",
-                "mean_snow_spatial",
-                "snow_anomaly")
 
-plot_list <- purrr::imap(model_list, function(mod, group) {
-  
-  purrr::map(predictors, function(var) {
-    
-    make_prediction_plot(
-      model = mod,
-      focal_var = var,
-      var_info = var_info
-    )
-    
-  })
-})
-
-#Arrange and export the plots for each group!
-young_variables_polygonal<-ggpubr::ggarrange(plot_list$young[[1]],
-                  plot_list$young[[2]],
-                  plot_list$young[[3]],
-                  plot_list$young[[4]],
-                  plot_list$young[[5]],
-                  plot_list$young[[6]],
-                  plot_list$young[[7]],
-                  labels = "AUTO")
-
-#And write that figure
-ggsave(filename = "young_variables_polygonal.jpeg", #name
-        plot = young_variables_polygonal,  #plot you want to save
-        path = figure_directory, #where its saved
-        width = 4500, #how wide
-        height = 3500,#how tall
-         units = "px", #units in pixels
-         bg = 'white') #make sure background is white
-
-#Arrange and export the plots for each group!
-female_variables_polygonal<-ggpubr::ggarrange(plot_list$females[[1]],
-                  plot_list$females[[2]],
-                  plot_list$females[[3]],
-                  plot_list$females[[4]],
-                  plot_list$females[[5]],
-                  plot_list$females[[6]],
-                  plot_list$females[[7]],
-                  labels = "AUTO")
-
-#And write that figure
-ggsave(filename = "female_variables_polygonal.jpeg", #name
-        plot = female_variables_polygonal,  #plot you want to save
-        path = figure_directory, #where its saved
-        width = 4500, #how wide
-        height = 3500,#how tall
-         units = "px", #units in pixels
-         bg = 'white') #make sure background is white
-
-
-#Arrange and export the plots for each group!
-male_variables_polygonal<-ggpubr::ggarrange(plot_list$males[[1]],
-                  plot_list$males[[2]],
-                  plot_list$males[[3]],
-                  plot_list$males[[4]],
-                  plot_list$males[[5]],
-                  plot_list$males[[6]],
-                  plot_list$males[[7]],
-                  labels = "AUTO")
-
-#And write that figure
-ggsave(filename = "male_variables_polygonal.jpeg", #name
-        plot = male_variables_polygonal,  #plot you want to save
-        path = figure_directory, #where its saved
-        width = 4500, #how wide
-        height = 3500,#how tall
-         units = "px", #units in pixels
-         bg = 'white') #make sure background is white
-
-
-###############################################################################################
-#And now the linear models
-model_list <- list(
-  males = linear_males,
-  females = linear_females,
-  young = linear_young
-)
-
-
-predictors <- c("linear_index",
-                "PC1",
-                "PC2",
-                "predator_index",
-                "lat",
-                "mean_snow_spatial",
-                "snow_anomaly")
-
-plot_list <- purrr::imap(model_list, function(mod, group) {
-  
-  purrr::map(predictors, function(var) {
-    
-    make_prediction_plot(
-      model = mod,
-      focal_var = var,
-      var_info = var_info
-    )
-    
-  })
-})
-
-#Arrange and export the plots for each group!
-young_variables_linear<-ggpubr::ggarrange(plot_list$young[[1]],
-                  plot_list$young[[2]],
-                  plot_list$young[[3]],
-                  plot_list$young[[4]],
-                  plot_list$young[[5]],
-                  plot_list$young[[6]],
-                  plot_list$young[[7]],
-                  labels = "AUTO")
-
-#And write that figure
-ggsave(filename = "young_variables_linear.jpeg", #name
-        plot = young_variables_linear,  #plot you want to save
-        path = figure_directory, #where its saved
-        width = 4500, #how wide
-        height = 3500,#how tall
-         units = "px", #units in pixels
-         bg = 'white') #make sure background is white
-
-#Arrange and export the plots for each group!
-female_variables_linear<-ggpubr::ggarrange(plot_list$females[[1]],
-                  plot_list$females[[2]],
-                  plot_list$females[[3]],
-                  plot_list$females[[4]],
-                  plot_list$females[[5]],
-                  plot_list$females[[6]],
-                  plot_list$females[[7]],
-                  labels = "AUTO")
-
-#And write that figure
-ggsave(filename = "female_variables_linear.jpeg", #name
-        plot = female_variables_linear,  #plot you want to save
-        path = figure_directory, #where its saved
-        width = 4500, #how wide
-        height = 3500,#how tall
-         units = "px", #units in pixels
-         bg = 'white') #make sure background is white
-
-
-#Arrange and export the plots for each group!
-male_variables_linear<-ggpubr::ggarrange(plot_list$males[[1]],
-                  plot_list$males[[2]],
-                  plot_list$males[[3]],
-                  plot_list$males[[4]],
-                  plot_list$males[[5]],
-                  plot_list$males[[6]],
-                  plot_list$males[[7]],
-                  labels = "AUTO")
-
-#And write that figure
-ggsave(filename = "male_variables_linear.jpeg", #name
-        plot = male_variables_linear,  #plot you want to save
-        path = figure_directory, #where its saved
-        width = 4500, #how wide
-        height = 3500,#how tall
-         units = "px", #units in pixels
-         bg = 'white') #make sure background is white
 
 ```
 
 
+Females
+```{r}
+#Global model - note that overall disturbance and polygonal disturbance are highly correlated....
+global_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                     polygonal_index+
+                     linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                   mean_snow_spatial+
+                   snow_anomaly+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(global_females)
+
+#What about a "null" model that doesn't include disturbance?
+null_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   #  polygonal_index+
+                  #   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                   mean_snow_spatial+
+                   snow_anomaly+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(null_females)
+
+#Polygonal -THIS IS THE TOP MODEL FOR ALL DEER
+polygonal_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                     lat+
+                   mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(polygonal_females)
 
 
-#Fin.
+#Linear
+linear_females<-glmmTMB::glmmTMB(cbind(n_female, (n_weeks - n_female)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                     lat+
+                   mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(linear_females)
+
+
+
+#Model selection and cleanup into a nice dataframe!
+model_selection_females<- as.data.frame(model.sel(global_females, null_females, linear_females, polygonal_females,
+              rank = "AICc"))
+
+model_selection_females<-model_selection_females%>%
+  # Add model names as a column
+  mutate(model = rownames(model_selection_females)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+
+rownames(model_selection_females)<-NULL
+
+
+
+
+```
+
+
+Young Deer?
+```{r}
+#All disturbance
+#Global model - note that overall disturbance and polygonal disturbance are highly correlated....
+global_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                     polygonal_index+
+                     linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                   mean_snow_spatial+
+                   snow_anomaly+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(global_young)
+
+#What about a "null" model that doesn't include disturbance?
+null_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   #  polygonal_index+
+                  #   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                   lat+
+                   mean_snow_spatial+
+                   snow_anomaly+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(null_young)
+
+#Polygonal -THIS IS THE TOP MODEL FOR ALL DEER
+polygonal_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   polygonal_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                     lat+
+                   mean_snow_spatial*polygonal_index+
+                   snow_anomaly*polygonal_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(polygonal_young)
+
+
+#Linear
+linear_young<-glmmTMB::glmmTMB(cbind(n_young, (n_weeks - n_young)) ~
+                   linear_index+
+                   PC1 + PC2 + #Habitat covariates
+                   predator_index + #Predator index
+                     lat+
+                   mean_snow_spatial*linear_index+
+                   snow_anomaly*linear_index+
+                   (1|array),
+                 family = "binomial",
+                 data = wtd_dets)
+summary(linear_young)
+
+
+
+#Model selection and cleanup into a nice dataframe!
+model_selection_young<- as.data.frame(model.sel(global_young, null_young, linear_young, polygonal_young,
+              rank = "AICc"))
+
+model_selection_young<-model_selection_young%>%
+  # Add model names as a column
+  mutate(model = rownames(model_selection_young)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+
+rownames(model_selection_young)<-NULL
+
+
+
+```
+
+
+Ok, in the following here is what I want to do. I want to write a loop that performs an out of sample test of our model selection, to identify where the "best" top model is identified
+```{r}
+
+#These are the response variables to iterate over
+response_variables<-data.frame(response = c("cbind(n_male, (n_weeks - n_male)) ~",
+                      "cbind(n_female, (n_weeks - n_female)) ~",
+                      "cbind(n_young, (n_weeks - n_young)) ~"),
+                      name = c("males", "females", "young"))
+
+
+#Create a blank list of model selection tables
+model_selection_tables<-list()
+
+#How many simulations to do?
+n_sims<-100
+
+
+
+for(j in 1:nrow(response_variables)){
+    
+  #Store the current response variable we are working on 
+  response <- as.character(response_variables[j, 1])
+  #And the name, we will need that for later
+  name<- as.character(response_variables[j, 2])
+  
+  print(paste("Working on models for", name, "at", Sys.time()))
+  
+  
+  #Pre-emptive, but its more efficient to define the model formulas here within this loop, so its only done once per group rather than everytime within the next loop! #Efficiency 101 baby
+  formula_global<- as.formula(paste(response,
+                      "polygonal_index+linear_index+PC1 + PC2 +predator_index +lat+mean_snow_spatial+snow_anomaly+
+                           + (1|array)", sep = ""))
+  
+  formula_null<- as.formula(paste(response,
+                      "PC1 + PC2 +predator_index +lat+mean_snow_spatial+snow_anomaly+
+                           + (1|array)", sep = "")) 
+  formula_linear<- as.formula(paste(response,
+                      "linear_index+
+                      PC1 + PC2 +predator_index +lat+
+                      mean_snow_spatial*linear_index+
+                      snow_anomaly*linear_index+
+                           + (1|array)", sep = ""))
+  formula_polygonal<- as.formula(paste(response,
+                      "polygonal_index+
+                      PC1 + PC2 +predator_index +lat+
+                      mean_snow_spatial*polygonal_index+
+                      snow_anomaly*polygonal_index+
+                           + (1|array)", sep = ""))
+  
+  
+  #Now that we have identified our response variable, we need to many
+  #many times sample the data, fit each model, run model selection,
+  #and identify the top model. 
+  for(i in 1:n_sims){
+    
+    #Sample the dataframe - THIS IS WHERE WE DEFINE THE SAMPLING AMOUNT
+    sample<-wtd_dets%>%
+      slice_sample(prop = 0.90)
+    
+    
+    #Fit each model!
+    fit_global<-glmmTMB::glmmTMB(
+                formula = formula_global,
+                 family = "binomial",
+                 data = sample)
+    
+    fit_null<-glmmTMB::glmmTMB(
+                formula = formula_null,
+                 family = "binomial",
+                 data = sample)
+    
+    fit_linear<-glmmTMB::glmmTMB(
+                formula = formula_linear,
+                 family = "binomial",
+                 data = sample)
+    
+    fit_polygonal<-glmmTMB::glmmTMB(
+                formula = formula_polygonal,
+                 family = "binomial",
+                 data = sample)
+    
+    #Quick model selection! and cleanup
+   model_sel<-as.data.frame(MuMIn::model.sel(fit_global, fit_null, fit_linear, fit_polygonal,
+              rank = "AICc"))
+   
+   model_sel<-model_sel%>%
+    # Add model names as a column
+  mutate(model = rownames(model_sel)) %>%
+  # Keep only the columns you care about
+  dplyr::select(model, df, logLik, AICc, delta, weight) %>%
+  # Optional: arrange by AICc
+  arrange(AICc)%>%
+  mutate(weight = round(weight, digits = 2))
+   
+   #Get rid of the rownames, they are annoying
+   rownames(model_sel)<-NULL
+   
+   #Add the name, and the simulation number to this dataframe
+   model_sel<-model_sel%>%
+     mutate(group = name,
+            simulation = i)%>%
+     relocate(group, simulation)
+   
+   # Initialize the nested list if this is the first simulation for this group
+if (! name %in% names(model_selection_tables)) {
+  model_selection_tables[[name]] <- list()
+}
+
+# Store the model table for this simulation
+model_selection_tables[[name]][[i]] <- model_sel
+  }
+  
+  #Nothing to see here!
+  
+}
+
+#Ok now lets take those results and strip them out into a single dataframe
+all_model_results <- purrr::map_df(
+  model_selection_tables,
+  ~ purrr::map_df(.x, ~ .x)
+)
+
+#And finally, for each group, how often was the top model top?
+all_models <- c("fit_linear", "fit_polygonal", "fit_global", "fit_null")
+
+
+summary_table <-
+  all_model_results %>%
+  # Only the top model per simulation
+  filter(delta == 0) %>%
+  group_by(group, model) %>%
+  summarise(n_obs = n(), .groups = "drop") %>%
+  
+  # Expand so every group has all 4 models
+  tidyr::complete(
+    group,
+    model = all_models,
+    fill = list(n_obs = 0)
+  ) %>%
+  
+  # Add total sims and proportion
+  mutate(
+    total = n_sims,
+    prop_top = n_obs / total
+  )
+
+#And a plot!
+# Set factor order
+summary_table <- summary_table %>%
+  mutate(
+    group = factor(group, levels = c("males", "females", "young")),
+    model = factor(model,
+                   levels = c("fit_linear", "fit_polygonal", "fit_global", "fit_null"),
+                   labels = c("Linear", "Polygonal", "Global", "Null"))
+  )
+
+ggplot(summary_table, aes(x = model, y = prop_top, fill = model)) +
+  geom_col(width = 0.7, alpha = 0.9) +
+  facet_wrap(~ group) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)),
+                     limits = c(0, 1)) +
+  labs(
+    title = "Proportion of Simulations in Which Each Model Was Top",
+    x = "Model",
+    y = "Proportion Top Model"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_text(face = "bold")
+  )
+
+```
