@@ -35,7 +35,11 @@ covs<-read.csv(file.path(getwd(), "1. Species Response Variables/inputs/OSM_came
 weather<-read.csv(file.path(getwd(), "1. Species Response Variables/inputs/daymet_weather_data.csv"))
 
 #I am reading this in from the desktop since it is too large to push to github
+#Note Aidan you will have to update this
 weather_10<-read.csv("C:/Users/16043/Desktop/OSM white tailed deer/daymet_weather_data_10year.csv")
+
+
+
 
 
 ```
@@ -292,15 +296,52 @@ weather_summary <- weather_10 %>%
 
 #Ok so at this point I have the winter_year data for each site. Now I need to manipulate and decompose that data into what I need.
 
+
+
+
 #First, lets get the raw data into the wtd_dets dataframe
 #Identify the winter year to use
 wtd_dets<-wtd_dets%>%
   mutate(winter_year = year - 1)
 
+############################################
+#ADDING IN A LIL CHUNK FOR LAG YEARS########
+#I think the simplest way will be to create extra dataframes and add them in sort of manually
+
+lag2<-wtd_dets%>%
+  #two winters before
+  mutate(winter_year = year - 2)%>%
+  dplyr::select(c(site, winter_year, year))%>%
+  left_join(weather_summary%>%
+              dplyr::select(site, winter_year, mean_snow))%>%
+  rename(winter_year_lag2 = winter_year,
+         mean_snow_lag2 = mean_snow)%>%
+  #Dumb, but I need to add back in the original winter year for re-joining later
+  mutate(winter_year = year - 1)
+
+lag3<-wtd_dets%>%
+  #two winters before
+  mutate(winter_year = year - 3)%>%
+  dplyr::select(c(site, winter_year, year))%>%
+  left_join(weather_summary%>%
+              dplyr::select(site, winter_year, mean_snow))%>%
+  rename(winter_year_lag3 = winter_year,
+         mean_snow_lag3 = mean_snow)%>%
+  #Dumb, but I need to add back in the original winter year for re-joining later
+  mutate(winter_year = year - 1)
+
+############################################
 wtd_dets<-wtd_dets%>%
   left_join(weather_summary%>%
   dplyr::select(site, winter_year, mean_snow, mean_min_temp), 
   by = c("site", "winter_year"))
+
+
+#And then add in the lagged data
+wtd_dets<-wtd_dets%>%
+  left_join(lag2)%>%
+  left_join(lag3)
+
 
 #make sure that worked- no NAs!
 summary(wtd_dets$mean_snow)

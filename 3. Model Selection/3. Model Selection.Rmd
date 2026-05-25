@@ -39,7 +39,11 @@ Lets prepare the data for modeling.
 
 #PC variables are already scaled, but lets scale the remaining variables
 wtd_dets<-wtd_dets%>%
-  mutate(across(c(disturbance_index, polygonal_index, linear_index, mean_snow_spatial, snow_anomaly, predator_index, lat), .fns = ~ as.numeric(scale(.x))))
+  rename(mean_snow_lag1 = mean_snow)%>%
+  mutate(across(c(disturbance_index, polygonal_index, linear_index, mean_snow_spatial, snow_anomaly, predator_index, lat,
+                  mean_snow_lag1,
+                  mean_snow_lag2,
+                  mean_snow_lag3), .fns = ~ as.numeric(scale(.x))))
 
          
 #Lets do a quick check of correlations
